@@ -9,14 +9,677 @@ import sys
 from XInput import *
 import socket
 from elm import *
+from elm import plugins
 from winreg import *
 from tkinter import messagebox
 emulator=elm.Elm()
 emulator.net_port=35000
 emulator.scenario='car'
 r=Thread(target=emulator.run)
+stream=None
+audio_device=None
 r.daemon=True
 r.start()
+def sine_wave_note(frequency, duration):
+    '''
+    Creates audio buffer representing a sine-wave
+    frequency: Hz
+    duration: seconds
+    '''
+    global sample_rate
+    elements = math.ceil(duration * sample_rate)
+    timesteps = np.linspace(start=0, stop=duration, num=elements, endpoint=False)
+    return np.sin(frequency * timesteps * 2 * np.pi)
+
+def sawtooth_wave_note(frequency, duration):
+    '''
+    Creates audio buffer representing a sine-wave
+    frequency: Hz
+    duration: seconds
+    '''
+    global sample_rate
+    elements = math.ceil(duration * sample_rate)
+    timesteps = np.linspace(start=0, stop=duration, num=elements, endpoint=False)
+    print(timesteps)
+    timesteps = timesteps.tolist()
+    timesteps = [1-((x * frequency * 2 * np.pi)%1) for x in timesteps]
+    timesteps = np.array(timesteps)
+    return frequency * timesteps * 2 * np.pi
+
+def random_wave_note(frequency, duration):
+    '''
+    Creates audio buffer representing a sine-wave
+    frequency: Hz
+    duration: seconds
+    '''
+    global sample_rate
+    elements = math.ceil(duration * sample_rate)
+    timesteps = np.linspace(start=0, stop=duration, num=elements, endpoint=False)
+    return np.array([float(x%1)-1 for x in range(len(timesteps))])
+
+def silence(duration):
+    '''
+    Creates audio buffer representing silence
+    duration: seconds
+    '''
+    global sample_rate
+    elements = math.ceil(duration * sample_rate)
+    return np.zeros(elements)
+
+def v_twin_90_deg():
+    '''Suzuki SV650/SV1000, Yamaha MT-07'''
+    return Engine(
+        idle_rpm=1000,
+        limiter_rpm=10500,
+        strokes=4,
+        cylinders=2,
+        timing=[270, 450],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_twin_60_deg():
+    return Engine(
+        idle_rpm=1100,
+        limiter_rpm=10500,
+        strokes=4,
+        cylinders=2,
+        timing=[300, 420],        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_twin_45_deg():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=2,
+        timing=[315, 405],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_4():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7800,
+        strokes=4,
+        cylinders=4,
+        timing=[180, 180, 180, 180],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_7():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7800,
+        strokes=4,
+        cylinders=7,
+        timing=[103, 103, 103, 103, 103, 103, 102],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_6():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7800,
+        strokes=4,
+        cylinders=6,
+        timing=[120, 120, 120, 120, 120, 120],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+def v_8_LR():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=8,
+        timing=[90]*8,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_8_LS():
+    return Engine(
+        idle_rpm=600,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=8,
+        timing=[180, 270, 180, 90, 180, 270, 180, 90],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_8_FP():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=8,
+        timing=[180]*8,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_8_FP_TVR():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=8,
+        timing=[75]*8,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def w_16():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=16,
+        timing=[27, 90-27, 27, 180-117, 27, 270-207, 27, 360-297, 27, 90-27, 27, 180-117, 27, 270-207, 27, 360-297],
+        #timing=[180, 270, 180, 90],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_9():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=9,
+        timing=[80]*9,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_1():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=1,
+        timing=[720],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_7_4_3():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=7,
+        timing=[180, 90, 180, 270]+[240]*3,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_16():
+    whynot=16
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=whynot,
+        timing=[720/whynot]*whynot,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_5():
+    whynot=5
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=whynot,
+        timing=[720/whynot]*whynot,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_any():
+    whynot=5
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=whynot,
+        timing=[720/whynot]*whynot,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_5_crossplane():
+    whynot=5
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=whynot,
+        timing=[180, 90, 180, 90, 180],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_4_uneven_firing():
+    whynot=4
+    mini = 170
+    maxi = 190
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7800,
+        strokes=4,
+        cylinders=whynot,
+        timing=[rd.uniform(mini, maxi), rd.uniform(mini, maxi), rd.uniform(mini, maxi), rd.uniform(mini, maxi)],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def boxer_4_crossplane_custom(rando=[0]*4):  #wrx
+    whynot=4
+    because=180
+    #because=rando
+    return Engine(
+        idle_rpm=750,
+        limiter_rpm=6700,
+        strokes=4,
+        cylinders=whynot,
+        timing=[because, 360-because]*2,
+        #timing = [180, 270, 180, 90],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1),
+        unequal=rando
+    )
+
+def boxer_4_half():
+    whynot=2
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=6700,
+        strokes=4,
+        cylinders=whynot,
+        timing=[180, 720-180],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def random():
+    #whynot=rd.choice([4, 8, 16])
+    whynot=4
+    print(whynot)
+    randlist = []
+    for i in range(whynot):
+        rando = randrange(int(360/5/whynot), int(1440/5/whynot))*5
+    randlist = [randrange(int(360/5/whynot), int(1440/5/whynot))*5 for x in range(whynot)]
+    print(randlist)
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=whynot,
+        timing=randlist,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_four_90_deg():
+    return Engine(
+        idle_rpm=1100,
+        limiter_rpm=16500,
+        strokes=4,
+        cylinders=4,
+        timing=[180, 90, 180, 270],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def fake_rotary_2rotor():
+    difference = 60
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=8300,
+        strokes=2,
+        cylinders=2,
+        #timing=[90, 720-90],
+        timing = [difference, 720-difference],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_4_1_spark_plug_disconnected():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7800,
+        strokes=4,
+        cylinders=3,
+        timing=[180, 360, 180],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def V_12(rando=[0]*12):
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=12,
+        timing=[60]*12,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1),
+        unequal=rando
+    )
+
+class Stopwatch:
+        def __init__(self):
+                self.start_time=time.time()
+        def reset(self):
+                self.start_time=time.time()
+        def get_time(self):
+                return time.time()-self.start_time
+'''Basic simulation of engine for purposes of audio generation'''
+sample_rate = 44100
+max_16bit = 2**(16-1)-1  # 32,767
+
+# added by omar
+sound_merge_method = "average"  # max or average
+
+import math
+import numpy as np
+import pyaudio
+
+class AudioDevice:
+    def __init__(self):
+        self._pyaudio = pyaudio.PyAudio()
+
+    def close(self):
+        self._pyaudio.terminate()
+
+    def play_stream(self, callback):
+        global sample_rate
+        def callback_wrapped(in_data, frame_count, time_info, status_flags):
+            return (callback(frame_count), pyaudio.paContinue)
+
+        return self._pyaudio.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=sample_rate,
+            output=True,
+            stream_callback=callback_wrapped
+        )
+
+def concat(bufs):
+    return np.hstack(bufs)
+
+def overlay(bufs):
+    assert type(bufs) == list and len(bufs), 'bufs must be a non-empty list'
+    assert all(len(bufs[0]) == len(buf) for buf in bufs), 'All buffers must have the same length'
+
+    bufs = [np.copy(buf) for buf in bufs]
+    for buf in bufs:
+        #print(buf)
+        buf / len(bufs)
+
+    out_buf = np.sum(bufs, axis=0)
+    normalize_volume(out_buf)
+
+    return out_buf
+
+def pad_with_zeros(buf, num_zeros):
+    if num_zeros == 0:
+        return buf
+
+    return concat([
+        buf,
+        np.zeros(num_zeros)
+    ])
+
+def normalize_volume(buf, loudest_sample=None):
+    '''Makes the loudest sample in the buffer use the max_16bit volume. No clipping'''
+    buf *= np.int32(max_16bit / (loudest_sample or find_loudest_sample(buf)))
+
+def exponential_volume_dropoff(buf, duration, base):
+    global sample_rate
+    num_samples = math.ceil(duration * sample_rate)
+    zeros_required = len(buf) - num_samples
+
+    unpadded_curve = base / np.logspace(1, 10, num=num_samples, base=base)
+    dropoff_curve = pad_with_zeros(unpadded_curve, zeros_required)
+
+    buf *= dropoff_curve
+
+def find_loudest_sample(buf):
+    return np.max(np.abs(buf))
+
+def aslice(buf, duration):
+    '''Take slice of audio buffers based on the duration of sound required'''
+    global sample_rate
+    if duration <= 0:
+        return []
+    num_samples = math.ceil(duration * sample_rate)
+    return buf[:num_samples]
+
+def in_playback_format(buf):
+    return buf.astype(np.int16)
+
+import math
+import numpy as np
+
+def _convert_timing_format(timing):
+    # Convert timing format from standard format to our internal format.
+    # Standard format: each element is the number of crankshaft degrees that cylinder should wait
+    #   to fire after the _previous_ cylinder fires
+    # Internal format: each element is the number of crankshaft degrees that cylinder should wait
+    #   to fire after the _first_ cylinder fires
+    timing[0] = 0 # we automatically wait for crank to finish rotation before coming back to first cylinder
+    for i in range(1, len(timing)):
+        timing[i] += timing[i-1]
+
+class Engine:
+    def __init__(self, idle_rpm, limiter_rpm, strokes, cylinders, timing, fire_snd, between_fire_snd, unequal=[]):
+        '''
+        Note: all sounds used will be concatenated to suit engine run speed.
+        Make sure there's excess audio data available in the buffer.
+
+        idle_rpm: engine speed at idle
+        limiter_rpm: engine speed at rev limiter
+        strokes: number of strokes in full engine cycle, must be 2 or 4 (new: 3 for rotary)
+        cylinders: number of cylinders in engine
+        timing: array where each element is the number of crankshaft degrees that cylinder should wait
+          to fire after the previous cylinder fires. See engine_factory.py for examples
+        fire_snd: sound engine should make when a cylinder fires
+        between_fire_snd: sound engine should make between cylinders firing
+        '''
+        global sample_rate
+        # Audio library will request a specific number of samples, but we can't simulate partial engine
+        # revolutions, so we buffer whatever we have left over. We start with some zero samples to stop
+        # the pop as the audio device opens.
+        self._audio_buffer = np.zeros([256])
+
+        self._rpm = idle_rpm
+        self.idle_rpm = idle_rpm
+        self.limiter_rpm = limiter_rpm
+
+        #assert strokes in (2, 4), 'strokes not in (2, 4), see docstring'
+        self.strokes = strokes
+
+        assert cylinders > 0, 'cylinders <= 0'
+        self.cylinders = cylinders
+
+        assert len(timing) == cylinders, 'len(timing) != cylinders, see docstring'
+        self.timing = timing
+        _convert_timing_format(self.timing)
+
+        assert type(fire_snd) == np.ndarray and \
+               type(between_fire_snd) == np.ndarray, \
+            'Sounds should be passed in as numpy.ndarray buffers'
+        assert len(fire_snd) >= sample_rate * 1 and \
+               len(between_fire_snd) >= sample_rate * 1, \
+            'Ensure all audio buffers contain at least 1 second of data, see docstring'
+        self.fire_snd = fire_snd
+        self.between_fire_snd = between_fire_snd
+        
+        #added by omar
+        if not unequal:
+            unequal = [0]*cylinders
+        self.unequal = unequal
+
+        self.unequalmore = []
+        self.previousms = 0
+
+    def _gen_audio_one_engine_cycle(self):
+        global sound_merge_method
+        # Calculate durations of fire and between fire events
+        strokes_per_min = self._rpm * 2 # revolution of crankshaft is 2 strokes
+        strokes_per_sec = strokes_per_min / 60
+        sec_between_fires = self.strokes / strokes_per_sec
+        fire_duration = sec_between_fires / self.strokes # when exhaust valve is open
+        between_fire_duration = sec_between_fires / self.strokes * (self.strokes-1) # when exhaust valve is closed
+
+        # Generate audio buffers for all of the cylinders individually
+        bufs = []
+        bufsunequal = []
+        fire_snd = aslice(self.fire_snd, fire_duration)
+        for cylinder in range(0, self.cylinders):
+            unequalms = (
+                self.unequal[cylinder]/1000  # unequal converted from milliseconds to seconds
+                if self.unequal[cylinder] > 0  # if unequal set
+                #else self.unequal[cylinder]  # else 0
+                else 0
+            )
+            #unequalms = min(unequalms, (self.timing[cylinder] / 180) * 2 / strokes_per_sec)
+            before_fire_duration = (self.timing[cylinder] / 180) / strokes_per_sec# + unequalms # 180 degrees crankshaft rotation per stroke
+            before_fire_snd = aslice(self.between_fire_snd, before_fire_duration+unequalms)
+            after_fire_duration = between_fire_duration - before_fire_duration # - unequalms
+            after_fire_snd = aslice(self.between_fire_snd, after_fire_duration)
+            #print(len(audio_tools.concat([before_fire_snd, fire_snd, after_fire_snd])))
+            if len(self.unequalmore):
+                bufsunequal.append(np.array(self.unequalmore))
+            if unequalms:  # if unequal parameter set for cylinder
+                #print("unequal")
+                bufs.append(  # add to buffer
+                    np.array(  # make array
+                        [0]*len(  # a tring of 0s the length of
+                            concat(
+                                [
+                                    aslice(
+                                        self.between_fire_snd,
+                                        before_fire_duration
+                                    ),  # silence as long as before_fire_duration (in seconds)
+                                    fire_snd,
+                                    after_fire_snd
+                                ]  # complete combustion sound including before and after
+                            )
+                        )
+                    )
+                )
+                #if self.previousms != unequalms:  # unequal ms different from previous cylinder
+                before_fire_snd = aslice(
+                    self.between_fire_snd, # silence
+                    before_fire_duration + unequalms# - self.previousms  # current duration plus difference between unequals
+                )  # make interval before sound smaller
+                bufsunequal.append(
+                    concat(
+                        [before_fire_snd, fire_snd, after_fire_snd]  # combustion + silence
+                    )
+                )  # add generated combustion to unequal buffer
+                self.previousms = unequalms  # make current unequalms the new previousms
+            else:
+                #forgot what this was for, probly before separate buffers
+                """if self.unequaldelay > len(audio_tools.concat([before_fire_snd, fire_snd, after_fire_snd])):
+
+                    self.unequaldelay -= len(audio_tools.concat([before_fire_snd, fire_snd, after_fire_snd]))
+                else:
+                    bufsunequal.append(
+                        np.array(  # make numpy array of
+                            [0]*(  # a list of 0s with the amount of 0s equal to
+                                len(  # the length of
+                                    audio_tools.slice(self.between_fire_snd, self.unequaldelay)  # silence as long as unequal offset
+                                ) 
+                                - 
+                                len(
+                                    audio_tools.concat([before_fire_snd, fire_snd, after_fire_snd])
+                                )
+                            )
+                        )
+                    )"""
+                bufsunequal.append(
+                    np.array(
+                        [0]*len(
+                            concat(
+                                [before_fire_snd, fire_snd, after_fire_snd]  # combustion + silence
+                            )
+                        )
+                    )
+                )  # add silence to unequal buffer
+                bufs.append(
+                    concat(
+                        [before_fire_snd, fire_snd, after_fire_snd]  # combustion + silence
+                    )
+                )  # add combustion package to equal buffer
+
+        # combine both lists
+        #print(len(bufs))
+        #print("nextone")
+        #print(len(bufsunequal))
+        #bufs = list(np.maximum(bufs, bufsunequal))
+        # Make sure all buffers are the same length (may be off by 1 because of rounding issues)
+        
+        max_buf_len = len(max(bufs, key=len))
+        bufs = [pad_with_zeros(buf, max_buf_len-len(buf)) for buf in bufs]
+        
+        # same thing as before but with unequal buffer
+
+        max_buf_len_unequal = len(max(bufsunequal, key=len))
+        #print(max_buf_len)
+        #might not be good idea with unequal, since that's how the unequalness is made
+        bufsunequal = [pad_with_zeros(buf, max_buf_len_unequal-len(buf)) for buf in bufsunequal]
+
+        # Combine all the cylinder sounds
+        engine_snd = overlay(bufs)  # not sure
+        engine_snd_unequal = overlay(bufsunequal)  # not sure
+        #print(len(engine_snd), len(engine_snd_unequal))
+        if sum(engine_snd_unequal) > 0:  # if unequal buffer contains anything
+            if sound_merge_method == "average":  # average of both buffers
+                engine_snd = np.mean([engine_snd, engine_snd_unequal[:len(engine_snd)]], axis=0)
+            elif sound_merge_method == "max":  # maximum values of both buffers
+                engine_snd = np.maximum(engine_snd, engine_snd_unequal[:len(engine_snd)])
+        if len(engine_snd_unequal) > len(engine_snd):  # if unequal buffer is longer than 
+            self.unequalmore = engine_snd_unequal[len(engine_snd):]
+        return in_playback_format(engine_snd)
+
+    def gen_audio(self, num_samples):
+        '''Return `num_samples` audio samples representing the engine running'''
+        # If we already have enough samples buffered, just return those
+        if num_samples < len(self._audio_buffer):
+            buf = self._audio_buffer[:num_samples]
+            self._audio_buffer = self._audio_buffer[num_samples:]
+            return buf
+
+        # Generate new samples. If we still don't have enough, loop what we generated
+        engine_snd = self._gen_audio_one_engine_cycle()
+        while len(self._audio_buffer) + len(engine_snd) < num_samples:
+            engine_snd = concat([engine_snd, engine_snd]) # this is unlikely to run more than once
+
+        # Take from the buffer first, and use new samples to make up the difference
+        # Leftover new samples become the audio buffer for the next run
+        num_new_samples = num_samples - len(self._audio_buffer)
+        buf = concat([self._audio_buffer, engine_snd[:num_new_samples]])
+        #assert len(buf) == num_samples, (f'${num_samples} requested, but ${len(buf)} samples provided, from ' +
+            #f'${len(self._audio_buffer)} buffered samples and ${num_new_samples} new samples')
+        self._audio_buffer = engine_snd[num_new_samples:]
+        return buf
+    def specific_rpm(self, speed):  # TODO
+        self._rpm=speed
+_fire_snd = sine_wave_note(frequency=160, duration=1)
+normalize_volume(_fire_snd)
+exponential_volume_dropoff(_fire_snd, duration=0.06, base=5)
 def get_resource_path(relative_path):
     base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
@@ -100,15 +763,10 @@ class Sound:
         self.state = "starting"
         
         pg.mixer.init()
-        
-        self.idle_sound = pg.mixer.Sound(get_resource_path("sounds/idle.mp3"))
-        self.brake_sound = pg.mixer.Sound(get_resource_path("sounds/brake.mp3"))
-        self.top_sound = pg.mixer.Sound(get_resource_path("sounds/top_speed.mp3"))
-        
+        self.brake_sound = pg.mixer.Sound(get_resource_path("sounds/brake.mp3"))        
         self.crash_sound = pg.mixer.Sound(get_resource_path("sounds/crash.mp3"))
         self.scratch_sound = pg.mixer.Sound(get_resource_path("sounds/scratch.wav"))
         self.finish_sound = pg.mixer.Sound(get_resource_path("sounds/finish.wav"))
-
     def stop_sound(self):
         try:
             if self.state == "idle":
@@ -125,66 +783,6 @@ class Sound:
         except:
             pass
 
-    def play_idle(self):
-        state_changed = False
-
-        if self.state == "starting":
-            state_changed = True
-        elif self.state == "accelerate" or self.state == "decelerate":
-            pg.mixer.music.stop()
-            state_changed = True
-        elif self.state == "brake":
-            self.brake_sound.stop()
-            state_changed = True
-        elif self.state == "crash":
-            self.state_change = True
-
-        if state_changed:
-            self.state = "idle"
-            self.idle_sound.play(100000)
-
-    def play_accelerate(self, position):
-        state_changed = False
-
-        if self.state == "idle":
-            self.idle_sound.stop()
-            state_changed = True
-        elif self.state == "decelerate":
-            pg.mixer.music.stop()
-            state_changed = True
-        elif self.state == "brake":
-            self.brake_sound.stop()
-            state_changed = True
-        elif self.state == "crash":
-            state_changed = True
-
-        if state_changed:
-            self.state = "accelerate"
-            pg.mixer.music.load(get_resource_path("sounds/accelerate.mp3"))
-            pg.mixer.music.play(-1, position * 10)
-
-    def stop_accelerate(self):
-        if self.state == "accelerate":
-            pg.mixer.music.stop()
-
-    def play_decelerate(self, position):
-        state_changed = False
-
-        if self.state == "accelerate":
-            pg.mixer.music.stop()
-            state_changed = True
-        elif self.state == "brake":
-            self.brake_sound.stop()
-            state_changed = True
-        elif self.state == "top":
-            self.top_sound.stop()
-            state_changed = True
-
-        if state_changed:
-            self.state = "decelerate"
-            pg.mixer.music.load(get_resource_path("sounds/decelerate.mp3"))
-            pg.mixer.music.play(0, position * 10)
-
     def play_brake(self):
         state_changed = False
 
@@ -198,17 +796,6 @@ class Sound:
         if state_changed:
             self.state = "brake"
             self.brake_sound.play()
-
-    def play_top(self):
-        state_changed = False
-
-        if self.state == "accelerate":
-            pg.mixer.music.stop()
-            state_changed = True
-
-        if state_changed:
-            self.state = "top"
-            self.top_sound.play(100000)
 
     def play_crash(self):
         state_changed = False
@@ -339,7 +926,6 @@ class Car:
         self.telemetry={'speed':0, 'rpm':0, 'gear':0}
         self.front_distance = 300
         self.side_distance = 32
-
         self.collide_front = False
         self.collide_back = False
         self.collide_left = False
@@ -350,12 +936,8 @@ class Car:
         self.collide_y = 0
 
         self.sound = Sound()
-
+        self.sound.state='idle'
     def update(self, acc, steering, walls):
-        if self.speed <= 0:
-            self.sound.play_idle()
-        if self.speed == self.top_speed:
-            self.sound.play_top()
         if acc>0 and not self.collide_front:
             if self.gear==1 and self.speed<40:
                 self.speed+=0.9*acc*self.acceleration
@@ -374,18 +956,23 @@ class Car:
             if self.speed > self.top_speed:
                 self.speed = self.top_speed
             if self.speed>self.top_speed*acc:
-                self.sound.play_decelerate(1 - self.rpm/8000)
                 if self.speed / self.top_speed > 0.66:
                     self.speed -= 3 * self.deceleration
                 elif self.speed / self.top_speed > 0.33:
                     self.speed -= 2 * self.deceleration
                 self.speed -= self.deceleration
+                state_changed=False
+                if not self.sound.state=='decelerate':
+                    state_changed==True
+                self.sound.state='decelerate'
             else:
-                self.sound.play_accelerate(self.rpm/8000)
+                state_changed=False
+                if not self.sound.state=='accelerate':
+                    state_changed==True
+                self.sound.state='accelerate'
             self.telemetry={'speed':self.speed, 'rpm':self.rpm, 'gear':self.gear}
             self.x += self.speed * cos(self.look_angle)
             self.y += self.speed * sin(self.look_angle)
-            self.sound.play_accelerate(self.rpm/8000)
         if acc<0:
             if self.speed == 0 and not self.collide_back:
                 self.x -= self.reverse_speed * cos(self.look_angle)
@@ -408,7 +995,6 @@ class Car:
             elif self.speed == 0 and acc<0 and not self.collide_back and not self.collide_left:
                 self.look_angle -= self.turn_speed*steering
         if acc==0 and self.speed > 0 and not self.collide_front and not self.collide_left and not self.collide_right:
-            self.sound.play_decelerate(1 - self.rpm/8000)
             if self.speed / self.top_speed > 0.66:
                 self.speed -= 3 * self.deceleration
             elif self.speed / self.top_speed > 0.33:
@@ -782,7 +1368,7 @@ def generate_rays(look_angle, fov, screen_width, res):
     return [Ray(angle) for angle in np.arange(look_angle - fov / 2, look_angle + fov / 2, fov * res / screen_width)]
 
 def play_game(track_distance):
-    global port, address
+    global port, address, stream, audio_device
     def gear_up():
         car.gear+=1
         if car.gear==2:
@@ -830,7 +1416,6 @@ def play_game(track_distance):
     pg.display.set_caption("Car Racing 3D v0.5 (c) sserver")
     clock = pg.time.Clock()
     font = pg.font.SysFont(None, 36)
-
     # critical settings
     fov = np.deg2rad(60)
     height_scale = 100000
@@ -838,7 +1423,6 @@ def play_game(track_distance):
     res = 1
     fps = 48
     road_width = 400
-
     # static elements
     bg_color = pg.Color(21, 1, 3)
     font_color = pg.Color("white")
@@ -849,6 +1433,10 @@ def play_game(track_distance):
 
     # load objects
     car = Car(0, road_width / 2, 0, screen_width, screen_height)
+    car.rpm=750
+    engine = boxer_4_crossplane_custom([1, 1, 0, 0])
+    audio_device = AudioDevice()
+    stream = audio_device.play_stream(engine.gen_audio)
     speedometer = Speedometer(car, screen_width, screen_height)
     track = Track(track_distance * 20000, road_width)
     rays = generate_rays(car.look_angle, fov, screen_width, res)
@@ -857,7 +1445,6 @@ def play_game(track_distance):
     minimap = Minimap(car, track, screen_width, screen_height)
     skyline = pg.transform.smoothscale(pg.image.load(get_resource_path("sprites/skyline.jpg")), (screen_width, screen_height / 2)).convert()
     skyline_turn_sensitivity = 200
-
     # dynamic loader of walls
     load_walls = pg.USEREVENT + 1
     pg.time.set_timer(load_walls, 1000)
@@ -940,6 +1527,7 @@ def play_game(track_distance):
                     # automatically lower graphics if fps is low
                     res += 1
                     rays = generate_rays(car.look_angle, fov, screen_width, res)
+        engine.specific_rpm(car.rpm)
         car.update(acc, steering, walls)
         if car.gear==0:
             if acc>0:
@@ -985,6 +1573,8 @@ def play_game(track_distance):
             car.speed=0
             car.rpm=0
             car.gear=0
+            stream.close()
+            audio_device.close()
             set_vibration(0, 0, 0)
             car.sound.play_finish()
             set_vibration(0, 0, 0)
@@ -1040,6 +1630,8 @@ def crash_vibration():
 def exit_program():
     pg.quit()
     set_vibration(0, 0, 0)
+    emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
+    emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
     os._exit(0)
 if __name__ == "__main__":
     emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
