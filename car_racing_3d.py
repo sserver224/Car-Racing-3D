@@ -17,6 +17,16 @@ emulator.net_port=35000
 emulator.scenario='car'
 r=Thread(target=emulator.run)
 stream=None
+DATA_OUT_FORMAT = [
+    {'size': 4,'type': 'int32','name': 'IsRaceOn'},
+    {'size': 4,'type': 'float','name': 'EngineMaxRpm'},
+    {'size': 4,'type': 'float','name': 'EngineIdleRpm'},
+    {'size': 4,'type': 'float','name': 'CurrentEngineRpm'},
+    {'size': 4,'type': 'float','name': 'Speed'},
+    {'size': 1,'type': 'uint8@normalize255to1','name': 'Throttle'},
+    {'size': 1,'type': 'uint8@normalize255to1','name': 'Brake'},
+    {'size': 1,'type': 'uint8','name': 'Gear'},
+    {'size': 1,'type': 'uint8@normalize255to1','name': 'Steer'}]
 audio_device=None
 r.daemon=True
 r.start()
@@ -769,12 +779,8 @@ class Sound:
         self.finish_sound = pg.mixer.Sound(get_resource_path("sounds/finish.wav"))
     def stop_sound(self):
         try:
-            if self.state == "idle":
-                self.idle_sound.stop()
-            elif self.state == "accelerate" or self.state == "decelerate":
+            if self.state == "accelerate" or self.state == "decelerate":
                 pg.mixer.music.stop()
-            elif self.state == "top":
-                self.top_sound.stop()
             elif self.state == "brake":
                 self.brake_sound.stop()
             elif self.state == "crash":
@@ -790,7 +796,6 @@ class Sound:
             pg.mixer.music.stop()
             state_changed = True
         if self.state == "top":
-            self.top_sound.stop()
             state_changed = True
 
         if state_changed:
@@ -801,13 +806,11 @@ class Sound:
         state_changed = False
 
         if self.state == "idle":
-            self.idle_sound.stop()
             state_changed = True
         elif self.state == "brake":
             self.brake_sound.stop()
             state_changed = True
         elif self.state == "top":
-            self.top_sound.stop()
             state_changed = True
         elif self.state == "accelerate" or self.state == "decelerate":
             pg.mixer.music.stop()
@@ -822,12 +825,8 @@ class Sound:
 
     def play_finish(self):
         pg.mixer.music.stop()
-        if self.state == "idle":
-            self.idle_sound.stop()
-        elif self.state == "brake":
-            self.brake_sound.stop()
-        elif self.state == "top":
-            self.top_sound.stop()            
+        if self.state == "brake":
+            self.brake_sound.stop()        
 
         self.finish_sound.play()
         sleep(1)
@@ -1005,6 +1004,7 @@ class Car:
             self.x += self.speed * cos(self.look_angle)
             self.y += self.speed * sin(self.look_angle)
         emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * '+str(self.rpm)+')</exec><writeln />'
+        emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int('+str(self.speed)+')</exec><writeln />'
         if collide_with_walls(
             walls,
             self.x + self.front_distance * cos(self.look_angle),
@@ -1272,6 +1272,7 @@ class Track:
                 visible_walls.append(wall)
         return visible_walls
 def start_menu():
+    global address, port
     pg.init()
     screen = pg.display.set_mode((800, 600))
     screen_width, screen_height = pg.display.get_surface().get_size()
@@ -1283,6 +1284,7 @@ def start_menu():
     bg_color = pg.Color(48, 48, 48)
     font_color = pg.Color("white")
     emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
+    emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
     title_text = title_font.render("Car Racing 3D v0.5 (c) sserver", True, font_color)
     title_rect = title_text.get_rect(center=(screen_width / 2, 18))
 
@@ -1301,10 +1303,19 @@ Developed by sserver224\nmywebsite1324.neocities.org"
     button_4 = pg.image.load(get_resource_path("buttons/button_4.png"))
     selection=1
     running = True
+    DATA_OUT_FORMAT[0]['value']=0
+    DATA_OUT_FORMAT[1]['value']=8000
+    DATA_OUT_FORMAT[2]['value']=750
+    DATA_OUT_FORMAT[3]['value']=0
+    DATA_OUT_FORMAT[4]['value']=0
+    DATA_OUT_FORMAT[5]['value']=0
+    DATA_OUT_FORMAT[6]['value']=0
+    DATA_OUT_FORMAT[7]['value']=0
     pg.display.set_icon(pg.image.load(get_resource_path("sprites/logo.bmp")))
     pg.display.set_caption("Car Racing 3D v0.5 (c) sserver - Currently selected: 3 mi")
     while running:
         clock.tick(30)
+        sock.sendto(bytes(str(DATA_OUT_FORMAT), "utf-8"), (address, port))
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 running = False
@@ -1448,7 +1459,7 @@ def play_game(track_distance):
     # dynamic loader of walls
     load_walls = pg.USEREVENT + 1
     pg.time.set_timer(load_walls, 1000)
-
+    DATA_OUT_FORMAT[0]['value']=1
     # timers and controls
     race_timer = None
     timer_started = False
@@ -1528,6 +1539,19 @@ def play_game(track_distance):
                     res += 1
                     rays = generate_rays(car.look_angle, fov, screen_width, res)
         engine.specific_rpm(car.rpm)
+        DATA_OUT_FORMAT[3]['value']=car.rpm
+        DATA_OUT_FORMAT[4]['value']=car.speed
+        if acc>0:
+            DATA_OUT_FORMAT[5]['value']=acc
+            DATA_OUT_FORMAT[6]['value']=0
+        elif acc<0:
+            DATA_OUT_FORMAT[5]['value']=0
+            DATA_OUT_FORMAT[6]['value']=abs(acc)
+        else:
+            DATA_OUT_FORMAT[5]['value']=0
+            DATA_OUT_FORMAT[6]['value']=0
+        DATA_OUT_FORMAT[7]['value']=car.gear
+        DATA_OUT_FORMAT[8]['value']=steering
         car.update(acc, steering, walls)
         if car.gear==0:
             if acc>0:
@@ -1571,6 +1595,14 @@ def play_game(track_distance):
             emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
             emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
             car.speed=0
+            DATA_OUT_FORMAT[0]['value']=0
+            DATA_OUT_FORMAT[1]['value']=8000
+            DATA_OUT_FORMAT[2]['value']=750
+            DATA_OUT_FORMAT[3]['value']=0
+            DATA_OUT_FORMAT[4]['value']=0
+            DATA_OUT_FORMAT[5]['value']=0
+            DATA_OUT_FORMAT[6]['value']=0
+            DATA_OUT_FORMAT[7]['value']=0
             car.rpm=0
             car.gear=0
             stream.close()
@@ -1630,6 +1662,14 @@ def crash_vibration():
 def exit_program():
     pg.quit()
     set_vibration(0, 0, 0)
+    DATA_OUT_FORMAT[0]['value']=0
+    DATA_OUT_FORMAT[1]['value']=0
+    DATA_OUT_FORMAT[2]['value']=0
+    DATA_OUT_FORMAT[3]['value']=0
+    DATA_OUT_FORMAT[4]['value']=0
+    DATA_OUT_FORMAT[5]['value']=0
+    DATA_OUT_FORMAT[6]['value']=0
+    DATA_OUT_FORMAT[7]['value']=0
     emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
     emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
     os._exit(0)
@@ -1649,6 +1689,7 @@ if __name__ == "__main__":
         SetValueEx(OpenKey(OpenKey(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver', reserved=0, access=KEY_ALL_ACCESS), 'Car Racing 3D', reserved=0, access=KEY_ALL_ACCESS), 'UDPAddr', 0, REG_SZ, '0.0.0.0')
     hostname=socket.gethostname()
     IP=socket.gethostbyname(hostname)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         import pyi_splash
         pyi_splash.update_text('UI Loaded ...')
