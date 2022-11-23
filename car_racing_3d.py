@@ -922,7 +922,6 @@ class Car:
         self.braking = 3
 
         self.turn_speed = np.deg2rad(1)
-        self.telemetry={'speed':0, 'rpm':0, 'gear':0}
         self.front_distance = 300
         self.side_distance = 32
         self.collide_front = False
@@ -969,7 +968,6 @@ class Car:
                 if not self.sound.state=='accelerate':
                     state_changed==True
                 self.sound.state='accelerate'
-            self.telemetry={'speed':self.speed, 'rpm':self.rpm, 'gear':self.gear}
             self.x += self.speed * cos(self.look_angle)
             self.y += self.speed * sin(self.look_angle)
         if acc<0:
