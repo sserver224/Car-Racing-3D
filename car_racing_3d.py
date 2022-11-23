@@ -937,19 +937,19 @@ class Car:
         self.sound.state='idle'
     def update(self, acc, steering, walls):
         if acc>0 and not self.collide_front:
-            if self.gear==1 and self.speed<40:
+            if self.gear==1 and self.speed<63*acc:
                 self.speed+=0.9*acc*self.acceleration
-            if self.gear==2 and self.speed<105:
+            if self.gear==2 and self.speed<105*acc:
                 self.speed+=acc*self.acceleration
-            if self.gear==3 and self.speed<150:
+            if self.gear==3 and self.speed<150*acc:
                 self.speed+=0.6*acc*self.acceleration
-            if self.gear==4 and self.speed<185:
+            if self.gear==4 and self.speed<185*acc:
                 self.speed+=0.4*acc*self.acceleration
-            if self.gear==5 and self.speed<220:
+            if self.gear==5 and self.speed<220*acc:
                 self.speed+=0.2*acc*self.acceleration
-            if self.gear==6 and self.speed<250:
+            if self.gear==6 and self.speed<250*acc:
                 self.speed+=0.08*acc*self.acceleration
-            if self.gear==7 and self.speed<284:
+            if self.gear==7 and self.speed<284*acc:
                 self.speed+=0.03*acc*self.acceleration
             if self.speed > self.top_speed:
                 self.speed = self.top_speed
@@ -1274,7 +1274,7 @@ def start_menu():
     pg.init()
     screen = pg.display.set_mode((800, 600))
     screen_width, screen_height = pg.display.get_surface().get_size()
-    pg.display.set_caption("Car Racing 3D v0.5 (c) sserver")
+    pg.display.set_caption("Car Racing 3D v0.5.1 (c) sserver")
     clock = pg.time.Clock()
     title_font = pg.font.SysFont(None, 48)
     text_font = pg.font.SysFont(None, 36)
@@ -1283,7 +1283,7 @@ def start_menu():
     font_color = pg.Color("white")
     emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
     emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
-    title_text = title_font.render("Car Racing 3D v0.5 (c) sserver", True, font_color)
+    title_text = title_font.render("Car Racing 3D v0.5.1 (c) sserver", True, font_color)
     title_rect = title_text.get_rect(center=(screen_width / 2, 18))
 
     left_text =  "CONTROLS:\n\
@@ -1310,7 +1310,7 @@ Developed by sserver224\nmywebsite1324.neocities.org"
     DATA_OUT_FORMAT[6]['value']=0
     DATA_OUT_FORMAT[7]['value']=0
     pg.display.set_icon(pg.image.load(get_resource_path("sprites/logo.bmp")))
-    pg.display.set_caption("Car Racing 3D v0.5 (c) sserver - Currently selected: 3 mi")
+    pg.display.set_caption("Car Racing 3D v0.5.1 (c) sserver - Currently selected: 3 mi")
     while running:
         clock.tick(30)
         sock.sendto(bytes(str(DATA_OUT_FORMAT), "utf-8"), (address, port))
@@ -1346,7 +1346,7 @@ Developed by sserver224\nmywebsite1324.neocities.org"
                 selection+=1
                 if selection>4:
                     selection=1
-                pg.display.set_caption("Car Racing 3D v0.5 (c) sserver - Currently selected: "+str(selection*3)+" mi")
+                pg.display.set_caption("Car Racing 3D v0.5.1 (c) sserver - Currently selected: "+str(selection*3)+" mi")
                 while get_button_values(get_state(0))['BACK']:
                     pass
             if get_button_values(get_state(0))['START']:
@@ -1422,7 +1422,7 @@ def play_game(track_distance):
     pg.init()
     screen = pg.display.set_mode((1280, 720), pg.SCALED)
     screen_width, screen_height = pg.display.get_surface().get_size()
-    pg.display.set_caption("Car Racing 3D v0.5 (c) sserver")
+    pg.display.set_caption("Car Racing 3D v0.5.1 (c) sserver")
     clock = pg.time.Clock()
     font = pg.font.SysFont(None, 36)
     # critical settings
@@ -1437,7 +1437,7 @@ def play_game(track_distance):
     font_color = pg.Color("white")
     road_color = pg.Color(48, 48, 48)
     road_rect = pg.Rect(0, screen_height / 2, screen_width, screen_height / 2)
-    title_text = font.render("Car Racing 3D v0.5 (c) sserver", True, font_color)
+    title_text = font.render("Car Racing 3D v0.5.1 (c) sserver", True, font_color)
     title_rect = title_text.get_rect(center=(screen_width / 2, 18))
 
     # load objects
@@ -1493,6 +1493,27 @@ def play_game(track_distance):
                     set_vibration(0, max(0, -1*acc*(max(0, car.speed)/20)/2), max(0, -1*acc*(max(0, car.speed)/20)))
             else:
                 set_vibration(0, 0, 0)
+            if get_button_values(get_state(0))['BACK']:
+                car.sound.stop_sound()
+                emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
+                emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
+                car.speed=0
+                DATA_OUT_FORMAT[0]['value']=0
+                DATA_OUT_FORMAT[1]['value']=8000
+                DATA_OUT_FORMAT[2]['value']=750
+                DATA_OUT_FORMAT[3]['value']=0
+                DATA_OUT_FORMAT[4]['value']=0
+                DATA_OUT_FORMAT[5]['value']=0
+                DATA_OUT_FORMAT[6]['value']=0
+                DATA_OUT_FORMAT[7]['value']=0
+                car.rpm=0
+                car.gear=0
+                stream.close()
+                audio_device.close()
+                set_vibration(0, 0, 0)
+                running = False
+                emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
+                emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
             if get_button_values(get_state(0))['START']:
                 car.reset(0, road_width / 2)
                 timer_started = False
@@ -1504,7 +1525,22 @@ def play_game(track_distance):
                 exit_program()
             if event.type == pg.KEYDOWN and not get_connected()[0]:
                 if event.key == pg.K_ESCAPE:
-                    car.sound.stop_sound()
+                    emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
+                    emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
+                    car.speed=0
+                    DATA_OUT_FORMAT[0]['value']=0
+                    DATA_OUT_FORMAT[1]['value']=8000
+                    DATA_OUT_FORMAT[2]['value']=750
+                    DATA_OUT_FORMAT[3]['value']=0
+                    DATA_OUT_FORMAT[4]['value']=0
+                    DATA_OUT_FORMAT[5]['value']=0
+                    DATA_OUT_FORMAT[6]['value']=0
+                    DATA_OUT_FORMAT[7]['value']=0
+                    car.rpm=0
+                    car.gear=0
+                    stream.close()
+                    audio_device.close()
+                    set_vibration(0, 0, 0)
                     running = False
                 if event.key == pg.K_UP:
                     acc=1
@@ -1582,7 +1618,7 @@ def play_game(track_distance):
                     gear_down()
             if car.rpm<1200 and car.gear>0:
                 gear_down()
-        if (acc>0 and (((car.rpm>4000*acc and car.gear==1) or car.rpm>6700*acc) and car.rpm>2000) and car.gear<7) or (acc>0 and car.gear==0):
+        if (acc>0 and ((car.rpm>6700*acc) and car.rpm>2000) and car.gear<7) or (acc>0 and car.gear==0):
             gear_up()
         if acc>0:
             if not timer_started:
