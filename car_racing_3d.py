@@ -691,7 +691,11 @@ _fire_snd = sine_wave_note(frequency=160, duration=1)
 normalize_volume(_fire_snd)
 exponential_volume_dropoff(_fire_snd, duration=0.06, base=5)
 def get_resource_path(relative_path):
-    base_path = os.path.abspath(".")
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 def collide_with_walls(walls, current_x, current_y, future_x, future_y):
     for wall in walls:
@@ -937,19 +941,19 @@ class Car:
         self.sound.state='idle'
     def update(self, acc, steering, walls):
         if acc>0 and not self.collide_front:
-            if self.gear==1 and self.speed<63*acc:
+            if self.gear==1 and self.speed<110*acc:
                 self.speed+=0.9*acc*self.acceleration
-            if self.gear==2 and self.speed<105*acc:
+            if self.gear==2 and self.speed<150*acc:
                 self.speed+=acc*self.acceleration
-            if self.gear==3 and self.speed<150*acc:
+            if self.gear==3 and self.speed<200*acc:
                 self.speed+=0.6*acc*self.acceleration
-            if self.gear==4 and self.speed<185*acc:
+            if self.gear==4 and self.speed<250*acc:
                 self.speed+=0.4*acc*self.acceleration
-            if self.gear==5 and self.speed<220*acc:
+            if self.gear==5 and self.speed<270*acc:
                 self.speed+=0.2*acc*self.acceleration
-            if self.gear==6 and self.speed<250*acc:
+            if self.gear==6 and self.speed<320*acc:
                 self.speed+=0.08*acc*self.acceleration
-            if self.gear==7 and self.speed<284*acc:
+            if self.gear==7 and self.speed<360*acc:
                 self.speed+=0.03*acc*self.acceleration
             if self.speed > self.top_speed:
                 self.speed = self.top_speed
@@ -1610,15 +1614,15 @@ def play_game(track_distance):
             car.rpm-=100
         if car.rpm<750:
             car.rpm=750
-        if car.rpm>8000:
-            car.rpm=8000
+        if car.rpm>10000:
+            car.rpm=10000
         if acc<=0:
             if car.rpm>3800:
                 if car.rpm<4000 and car.gear>0:
                     gear_down()
             if car.rpm<1200 and car.gear>0:
                 gear_down()
-        if (acc>0 and ((car.rpm>6700*acc) and car.rpm>2000) and car.gear<7) or (acc>0 and car.gear==0):
+        if (acc>0 and ((car.rpm>8500*acc) and car.rpm>2000) and car.gear<7) or (acc>0 and car.gear==0):
             gear_up()
         if acc>0:
             if not timer_started:
