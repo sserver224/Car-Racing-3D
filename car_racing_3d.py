@@ -942,9 +942,9 @@ class Car:
     def update(self, acc, steering, walls):
         if acc>0 and not self.collide_front:
             if self.gear==1 and self.speed<110*acc:
-                self.speed+=0.9*acc*self.acceleration
-            if self.gear==2 and self.speed<150*acc:
                 self.speed+=acc*self.acceleration
+            if self.gear==2 and self.speed<150*acc:
+                self.speed+=0.9*acc*self.acceleration
             if self.gear==3 and self.speed<200*acc:
                 self.speed+=0.6*acc*self.acceleration
             if self.gear==4 and self.speed<250*acc:
@@ -1616,6 +1616,19 @@ def play_game(track_distance):
             car.rpm=750
         if car.rpm>10000:
             car.rpm=10000
+        if acc==1:
+            if car.gear==2 and car.speed<110:
+                gear_down()
+            if car.gear==3 and car.speed<150:
+                gear_down()
+            if car.gear==4 and car.speed<200:
+                gear_down()
+            if car.gear==5 and car.speed<250:
+                gear_down()
+            if car.gear==6 and car.speed<270:
+                gear_down()
+            if car.gear==7 and car.speed<320:
+                gear_down()
         if acc<=0:
             if car.rpm>3800:
                 if car.rpm<4000 and car.gear>0:
