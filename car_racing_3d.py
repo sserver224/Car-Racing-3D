@@ -1005,8 +1005,11 @@ class Car:
                 self.speed = 0
             self.x += self.speed * cos(self.look_angle)
             self.y += self.speed * sin(self.look_angle)
+        if self.speed>255:
+            emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(255)</exec><writeln />'
+        else:
+            emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int('+str(self.speed)+')</exec><writeln />'
         emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * '+str(self.rpm)+')</exec><writeln />'
-        emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int('+str(self.speed)+')</exec><writeln />'
         if collide_with_walls(
             walls,
             self.x + self.front_distance * cos(self.look_angle),
@@ -1313,7 +1316,7 @@ Developed by sserver224\nmywebsite1324.neocities.org"
     DATA_OUT_FORMAT[5]['value']=0
     DATA_OUT_FORMAT[6]['value']=0
     DATA_OUT_FORMAT[7]['value']=0
-    pg.display.set_icon(pg.image.load(get_resource_path("sprites/logo.bmp")))
+    pg.display.set_icon(pg.image.load(get_resource_path("sprites/car.ico")))
     pg.display.set_caption("Car Racing 3D v0.5.1 (c) sserver - Currently selected: 3 mi")
     while running:
         clock.tick(30)
@@ -1617,17 +1620,17 @@ def play_game(track_distance):
         if car.rpm>10000:
             car.rpm=10000
         if acc==1:
-            if car.gear==2 and car.speed<110:
+            if car.gear==2 and car.speed<82:
                 gear_down()
-            if car.gear==3 and car.speed<150:
+            if car.gear==3 and car.speed<134:
                 gear_down()
-            if car.gear==4 and car.speed<200:
+            if car.gear==4 and car.speed<193:
                 gear_down()
-            if car.gear==5 and car.speed<250:
+            if car.gear==5 and car.speed<238:
                 gear_down()
-            if car.gear==6 and car.speed<270:
+            if car.gear==6 and car.speed<283:
                 gear_down()
-            if car.gear==7 and car.speed<320:
+            if car.gear==7 and car.speed<321:
                 gear_down()
         if acc<=0:
             if car.rpm>3800:
