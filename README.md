@@ -7,4 +7,5 @@ RevHeadz support demo:
 Coming Up in v1.0: Forza Telemetry Dashboard Support, Enemy Cars, More sound FX
 
 WARNING: Disconnecting internet while the game is running will crash it. To run without internet, disconnect internet prior to launching the game.
+
 Controller support is Windows only. On other OSes, controller support will be disabled (due to XInput being Windows-only).
