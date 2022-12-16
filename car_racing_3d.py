@@ -34,7 +34,10 @@ except ImportError:
 try:
     from winreg import *
 except:
-    pass
+    REG_SZ=0
+    REG_DWORD=0
+    def SetValueEx(a, b, c, d, e):
+        pass
 if len(errorlist)>0:
     try:
         from tkinter import messagebox
