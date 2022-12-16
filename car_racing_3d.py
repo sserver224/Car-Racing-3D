@@ -1,21 +1,84 @@
 import time
-import numpy as np
-import pygame as pg
-import numpy as np
+errorlist=[]
+loadfailed=False
+elm_missing=False
+try:
+    import numpy as np
+except ImportError:
+    errorlist.append('numpy')
+try:
+    import pygame as pg
+except:
+    errorlist.append('pygame')
 from math import sin, cos, fabs, pow, sqrt, pi, ceil
 from time import sleep
+from threading import Thread
 import os
+try:
+    import pyaudio
+except ImportError:
+    errorlist.append('pyaudio')
 import sys
-from XInput import *
+try:
+    from XInput import *
+except ImportError:
+    errorlist.append('XInput-python')
+except IOError:
+    loadfailed=True
 import socket
-from elm import *
-from elm import plugins
-from winreg import *
-from tkinter import messagebox
-emulator=elm.Elm()
-emulator.net_port=35000
-emulator.scenario='car'
-r=Thread(target=emulator.run)
+try:
+    from elm import *
+    from elm import plugins
+except ImportError:
+    errorlist.append('ELM327-emulator')
+try:
+    from winreg import *
+except:
+    pass
+if len(errorlist)>0:
+    try:
+        from tkinter import messagebox
+        tkinter_available=True
+    except:
+        tkinter_available=False
+    if tkinter_available:
+        if ('numpy' in errorlist) or ('pygame' in errorlist) or ('pyaudio' in errorlist):
+            messagebox.showerror('Critical Error', 'Module '+str(errorlist)+' is missing or damaged, some of which are core modules. Reinstall each module with:\npip install module\nThis program will now close.')
+            sys.exit(1)
+        elif ('ELM327-emulator' in errorlist):
+            elm_missing=True
+            if 'XInput-python' in errorlist: 
+                messagebox.showwarning('Warning', 'Module [ELM327-emulator, XInput-python] is missing or damaged. Reinstall each module with:\npip install module\nController support and OBD emulation will be disabled.')
+                def get_connected():
+                    return (False, False, False, False)
+                def set_vibration(a, b, c):
+                    pass
+            else:
+                messagebox.showwarning('Warning', 'Module ELM327-emulator is missing or damaged. Reinstall with:\npip install ELM327-emulator\nOBD emulation will be disabled.')
+        else:
+            messagebox.showwarning('Warning', 'Module XInput-python is missing or damaged. Reinstall with:\npip install XInput-python\nController support will be disabled.')
+            def get_connected():
+                return (False, False, False, False)
+            def set_vibration(a, b, c):
+                pass
+elif loadfailed:
+    messagebox.showwarning('Warning', 'XInput failed to load. Controller support will be disabled.')
+    def get_connected():
+        return (False, False, False, False)
+    def set_vibration(a, b, c):
+        pass
+if not elm_missing:
+    emulator=elm.Elm()
+    emulator.net_port=35000
+    emulator.scenario='car'
+    r=Thread(target=emulator.run)
+    r.daemon=True
+    r.start()
+else:
+    class Elm:
+        def __init__(self):
+            self.answer={}
+    emulator=Elm()
 stream=None
 DATA_OUT_FORMAT = [
     {'size': 4,'type': 'int32','name': 'IsRaceOn'},
