@@ -1,3 +1,4 @@
+#Working version-works with limited functionality on macOS and linux
 import time
 errorlist=[]
 loadfailed=False
