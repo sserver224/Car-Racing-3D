@@ -38,12 +38,12 @@ except:
     REG_DWORD=0
     def SetValueEx(a, b, c, d, e):
         pass
+try:
+    from tkinter import messagebox
+    tkinter_available=True
+except:
+    tkinter_available=False
 if len(errorlist)>0:
-    try:
-        from tkinter import messagebox
-        tkinter_available=True
-    except:
-        tkinter_available=False
     if tkinter_available:
         if ('numpy' in errorlist) or ('pygame' in errorlist) or ('pyaudio' in errorlist):
             messagebox.showerror('Critical Error', 'Module '+str(errorlist)+' is missing or damaged, some of which are core modules. Reinstall each module with:\npip install module\nThis program will now close.')
