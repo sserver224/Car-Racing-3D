@@ -95,8 +95,6 @@ DATA_OUT_FORMAT = [
     {'size': 1,'type': 'uint8','name': 'Gear'},
     {'size': 1,'type': 'uint8@normalize255to1','name': 'Steer'}]
 audio_device=None
-r.daemon=True
-r.start()
 def sine_wave_note(frequency, duration):
     '''
     Creates audio buffer representing a sine-wave
