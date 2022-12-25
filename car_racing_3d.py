@@ -1,15 +1,19 @@
-#Working version-works with limited functionality on macOS and linux
 import time
+import json as pickle
 errorlist=[]
 loadfailed=False
 elm_missing=False
+controller=None
+joysticks={}
+from struct import *
 try:
     import numpy as np
 except ImportError:
     errorlist.append('numpy')
 try:
     import pygame as pg
-except:
+    import pygame.joystick as joy
+except ImportError as e:
     errorlist.append('pygame')
 from math import sin, cos, fabs, pow, sqrt, pi, ceil
 from time import sleep
@@ -20,12 +24,6 @@ try:
 except ImportError:
     errorlist.append('pyaudio')
 import sys
-try:
-    from XInput import *
-except ImportError:
-    errorlist.append('XInput-python')
-except IOError:
-    loadfailed=True
 import socket
 try:
     from elm import *
@@ -33,43 +31,54 @@ try:
 except ImportError:
     errorlist.append('ELM327-emulator')
 try:
-    from winreg import *
-except:
-    REG_SZ=0
-    REG_DWORD=0
-    def SetValueEx(a, b, c, d, e):
-        pass
+    pg.init()
+    joy.init()
+except pg.error:
+    loadfailed=True
 try:
     from tkinter import messagebox
-    tkinter_available=True
 except:
     tkinter_available=False
+else:
+    tkinter_available=True
 if len(errorlist)>0:
     if tkinter_available:
         if ('numpy' in errorlist) or ('pygame' in errorlist) or ('pyaudio' in errorlist):
             messagebox.showerror('Critical Error', 'Module '+str(errorlist)+' is missing or damaged, some of which are core modules. Reinstall each module with:\npip install module\nThis program will now close.')
             sys.exit(1)
         elif ('ELM327-emulator' in errorlist):
+            messagebox.askokcancel('Warning', "Module ['ELM327-emulator'] is missing or damaged. Reinstall with:\npip install ELM327-emulator\nPress OK to load the game without OBD emulation, or Cancel to quit.", icon='warning')
+    else:
+        if ('numpy' in errorlist) or ('pygame' in errorlist) or ('pyaudio' in errorlist):
+            print('Module '+str(errorlist)+' is missing or damaged, some of which are core modules. Reinstall each module with:\npip install module')
+            input('Press ENTER to quit...')
+            sys.exit(1)
+        elif ('ELM327-emulator' in errorlist):
             elm_missing=True
-            if 'XInput-python' in errorlist: 
-                messagebox.showwarning('Warning', 'Module [ELM327-emulator, XInput-python] is missing or damaged. Reinstall each module with:\npip install module\nController support and OBD emulation will be disabled.')
-                def get_connected():
-                    return (False, False, False, False)
-                def set_vibration(a, b, c):
-                    pass
-            else:
-                messagebox.showwarning('Warning', 'Module ELM327-emulator is missing or damaged. Reinstall with:\npip install ELM327-emulator\nOBD emulation will be disabled.')
-        else:
-            messagebox.showwarning('Warning', 'Module XInput-python is missing or damaged. Reinstall with:\npip install XInput-python\nController support will be disabled.')
-            def get_connected():
-                return (False, False, False, False)
-            def set_vibration(a, b, c):
-                pass
+            print("Module ['ELM327-emulator'] is missing or damaged. Reinstall with:\npip install ELM327-emulator\nOBD emulation will be disabled.")
 elif loadfailed:
-    messagebox.showwarning('Warning', 'XInput failed to load. Controller support will be disabled.')
-    def get_connected():
-        return (False, False, False, False)
-    def set_vibration(a, b, c):
+    if tkinter_available:
+        messagebox.askokcancel('Warning', 'Joystick failed to load. Press OK to load the game without controller support, or Cancel to quit.', icon='warning')
+    else:
+        print('Joystick failed to load. Controller support will be disabled.')
+        input('Press ENTER to load the game...')
+try:
+    from winreg import *
+except ImportError:
+    if tkinter_available:
+        messagebox.showwarning('Warning', "Module ['winreg'] is missing or damaged. Reinstall with:\npip install winreg\nThe game will reset to defaults and new settings will not be saved.")
+    else:
+        print("Module ['winreg'] is missing or damaged. Reinstall with:\npip install winreg\nThe game will reset to defaults and new settings will not be saved.")
+        input('Press Enter to load the game...')
+    REG_SZ=0
+    REG_DWORD=0
+    def SetValueEx(a, b, c, d, e):
+        pass
+except Exception:
+    messagebox.showwarning('Warning', "Registry failed to load. The game will reset to defaults and new settings will not be saved.")
+    REG_SZ=0
+    REG_DWORD=0
+    def SetValueEx(a, b, c, d, e):
         pass
 if not elm_missing:
     emulator=elm.Elm()
@@ -84,16 +93,7 @@ else:
             self.answer={}
     emulator=Elm()
 stream=None
-DATA_OUT_FORMAT = [
-    {'size': 4,'type': 'int32','name': 'IsRaceOn'},
-    {'size': 4,'type': 'float','name': 'EngineMaxRpm'},
-    {'size': 4,'type': 'float','name': 'EngineIdleRpm'},
-    {'size': 4,'type': 'float','name': 'CurrentEngineRpm'},
-    {'size': 4,'type': 'float','name': 'Speed'},
-    {'size': 1,'type': 'uint8@normalize255to1','name': 'Throttle'},
-    {'size': 1,'type': 'uint8@normalize255to1','name': 'Brake'},
-    {'size': 1,'type': 'uint8','name': 'Gear'},
-    {'size': 1,'type': 'uint8@normalize255to1','name': 'Steer'}]
+DATA_OUT={'rpm': 0, 'mph': 0, 'gear':0}
 audio_device=None
 def sine_wave_note(frequency, duration):
     '''
@@ -466,8 +466,6 @@ max_16bit = 2**(16-1)-1  # 32,767
 sound_merge_method = "average"  # max or average
 
 import math
-import numpy as np
-import pyaudio
 
 class AudioDevice:
     def __init__(self):
@@ -542,10 +540,6 @@ def aslice(buf, duration):
 
 def in_playback_format(buf):
     return buf.astype(np.int16)
-
-import math
-import numpy as np
-
 def _convert_timing_format(timing):
     # Convert timing format from standard format to our internal format.
     # Standard format: each element is the number of crankshaft degrees that cylinder should wait
@@ -1005,7 +999,7 @@ class Car:
         self.sound = Sound()
         self.sound.state='idle'
     def update(self, acc, steering, walls):
-        if acc>0 and not self.collide_front:
+        if acc>0 and self.gear>=0 and not self.collide_front:
             if self.gear==1 and self.speed<110*acc:
                 self.speed+=acc*self.acceleration
             if self.gear==2 and self.speed<150*acc:
@@ -1039,11 +1033,11 @@ class Car:
                 self.sound.state='accelerate'
             self.x += self.speed * cos(self.look_angle)
             self.y += self.speed * sin(self.look_angle)
+        elif acc>0 and self.gear==-1:
+            self.x -= self.reverse_speed * cos(self.look_angle)
+            self.y -= self.reverse_speed * sin(self.look_angle)
         if acc<0:
-            if self.speed == 0 and not self.collide_back:
-                self.x -= self.reverse_speed * cos(self.look_angle)
-                self.y -= self.reverse_speed * sin(self.look_angle)
-            elif self.speed > 0 and not self.collide_front:
+            if self.speed > 0 and not self.collide_front:
                 self.sound.play_brake()
                 self.speed -= self.braking*abs(acc)
                 if self.speed < 0:
@@ -1344,51 +1338,65 @@ class Track:
 def start_menu():
     global address, port
     pg.init()
+    if not loadfailed:
+        joy.init()
     screen = pg.display.set_mode((800, 600))
     screen_width, screen_height = pg.display.get_surface().get_size()
-    pg.display.set_caption("Car Racing 3D v0.5.1 (c) sserver")
+    pg.display.set_caption("Car Racing 3D v0.7 (c) sserver")
     clock = pg.time.Clock()
     title_font = pg.font.SysFont(None, 48)
     text_font = pg.font.SysFont(None, 36)
-
     bg_color = pg.Color(48, 48, 48)
     font_color = pg.Color("white")
     emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
     emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
-    title_text = title_font.render("Car Racing 3D v0.5.1 (c) sserver", True, font_color)
+    title_text = title_font.render("Car Racing 3D v0.7 (c) sserver", True, font_color)
     title_rect = title_text.get_rect(center=(screen_width / 2, 18))
 
     left_text =  "CONTROLS:\n\
 Use RT/LT/LS or arrows to drive the car\n\
-Press R or START to restart\n\
+Press R or A/Cross to restart\n\
 RevHeadz OBD IP: Run ipconfig to view\n\
-For controller users, press SELECT to select option then START to choose. Selection will be shown on the title bar.\n\
+For controller users, press Y/Triangle to select option then A/Cross to choose. Selection will be shown on the title bar.\n\
 IMPORTANT: If unresponsive, click on the game window. Collision detection is a bit buggy. Keyboard controls are ignored if a controller is connected.\n\
 ABOUT:\n\
 Developed by sserver224\nmywebsite1324.neocities.org"
-    
     button_1 = pg.image.load(get_resource_path("buttons/button_1.png"))
     button_2 = pg.image.load(get_resource_path("buttons/button_2.png"))
     button_3 = pg.image.load(get_resource_path("buttons/button_3.png"))
     button_4 = pg.image.load(get_resource_path("buttons/button_4.png"))
     selection=1
+    for controller in joysticks.values():
+        controller.stop_rumble()
     running = True
-    DATA_OUT_FORMAT[0]['value']=0
-    DATA_OUT_FORMAT[1]['value']=8000
-    DATA_OUT_FORMAT[2]['value']=750
-    DATA_OUT_FORMAT[3]['value']=0
-    DATA_OUT_FORMAT[4]['value']=0
-    DATA_OUT_FORMAT[5]['value']=0
-    DATA_OUT_FORMAT[6]['value']=0
-    DATA_OUT_FORMAT[7]['value']=0
+    DATA_OUT['rpm']=0
+    DATA_OUT['speed']=0
+    DATA_OUT['gear']=0
+    if address!='0.0.0.0':
+        th=Thread(target=sock.send, args=[pickle.dumps(DATA_OUT)], daemon=True)
+        th.start()
     pg.display.set_icon(pg.image.load(get_resource_path("sprites/car.ico")))
-    pg.display.set_caption("Car Racing 3D v0.5.1 (c) sserver - Currently selected: 3 mi")
+    pg.display.set_caption("Car Racing 3D v0.7 (c) sserver - Currently selected: 3 mi")
     while running:
         clock.tick(30)
-        sock.sendto(bytes(str(DATA_OUT_FORMAT), "utf-8"), (address, port))
+        BUTTON_SELECT=3
+        BUTTON_START=0
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 running = False
+            if event.type == pg.JOYDEVICEADDED:
+                con=joy.Joystick(event.device_index)
+                joysticks[con.get_instance_id()] = con
+            if event.type == pg.JOYDEVICEREMOVED:
+                del joysticks[event.instance_id]
+            if event.type == pg.JOYBUTTONDOWN:
+                if event.button==BUTTON_START:
+                    return selection*5
+                elif event.button==BUTTON_SELECT:
+                    selection+=1
+                    if selection>4:
+                        selection=1
+                    pg.display.set_caption("Car Racing 3D v0.7 (c) sserver - Currently selected: "+str(selection*3)+" mi")
             if event.type == pg.KEYDOWN:
                 if event.key == pg.K_ESCAPE:
                     running = False
@@ -1404,27 +1412,15 @@ Developed by sserver224\nmywebsite1324.neocities.org"
                         return 15
                     elif 475 < mouse_y < 575:
                         return 20
-            
         screen.fill(bg_color)
-
         screen.blit(title_text, title_rect)
         blit_text(screen, left_text, (1, 100), text_font, font_color)
         screen.blit(button_1, (500, 100))
         screen.blit(button_2, (500, 225))
         screen.blit(button_3, (500, 350))
         screen.blit(button_4, (500, 475))
-        if get_connected()[0]:
-            if get_button_values(get_state(0))['BACK']:
-                selection+=1
-                if selection>4:
-                    selection=1
-                pg.display.set_caption("Car Racing 3D v0.5.1 (c) sserver - Currently selected: "+str(selection*3)+" mi")
-                while get_button_values(get_state(0))['BACK']:
-                    pass
-            if get_button_values(get_state(0))['START']:
-                return selection*5
         pg.display.flip()
-    set_vibration(0, 0, 0)
+    joy.quit()
     pg.quit()
     return None
 class Wall:
@@ -1492,9 +1488,13 @@ def play_game(track_distance):
                     car.rpm+=231
     # initialize pygame
     pg.init()
-    screen = pg.display.set_mode((1280, 720), pg.SCALED)
+    joy.init()
+    if is_fullscreen:
+        screen = pg.display.set_mode((0, 0), pg.FULLSCREEN)
+    else:
+        screen = pg.display.set_mode((1280, 720), pg.SCALED)
     screen_width, screen_height = pg.display.get_surface().get_size()
-    pg.display.set_caption("Car Racing 3D v0.5.1 (c) sserver")
+    pg.display.set_caption("Car Racing 3D v0.7 (c) sserver")
     clock = pg.time.Clock()
     font = pg.font.SysFont(None, 36)
     # critical settings
@@ -1507,9 +1507,10 @@ def play_game(track_distance):
     # static elements
     bg_color = pg.Color(21, 1, 3)
     font_color = pg.Color("white")
+    font_redline_color=pg.Color("red")
     road_color = pg.Color(48, 48, 48)
     road_rect = pg.Rect(0, screen_height / 2, screen_width, screen_height / 2)
-    title_text = font.render("Car Racing 3D v0.5.1 (c) sserver", True, font_color)
+    title_text = font.render("Car Racing 3D v0.7 (c) sserver", True, font_color)
     title_rect = title_text.get_rect(center=(screen_width / 2, 18))
 
     # load objects
@@ -1529,7 +1530,6 @@ def play_game(track_distance):
     # dynamic loader of walls
     load_walls = pg.USEREVENT + 1
     pg.time.set_timer(load_walls, 1000)
-    DATA_OUT_FORMAT[0]['value']=1
     # timers and controls
     race_timer = None
     timer_started = False
@@ -1547,72 +1547,117 @@ def play_game(track_distance):
         elif skyline_x < 0:
             screen.blit(skyline, (skyline_x + screen_width, 0))
         pg.draw.rect(screen, road_color, road_rect)
-        if get_connected()[0]:
-            gas=get_trigger_values(get_state(0))[1]
-            brake=get_trigger_values(get_state(0))[0]
-            if gas>0 and brake==0:
-                acc=gas
-            elif brake>0:
-                acc=-1*brake
-            else:
-                acc=0
-            if acc>0:
-                set_vibration(0, max(0, acc*(max(0, (50*acc)-car.speed)/(50*acc))), max(0, acc*(max(0, (50*acc)-car.speed)/(50*acc))))
-            elif acc<0:
-                if car.speed>20:
-                    set_vibration(0, 1.0, 1.0)
+        for controller in joysticks.values():
+            if ("PS4" in controller.get_name()) or ('Xbox' in controller.get_name()):
+                BUTTON_SELECT=1
+                BUTTON_START=0
+                AXIS_LX=0
+                AXIS_LY=1
+                AXIS_RX=2
+                AXIS_RY=3
+                AXIS_LT=4
+                AXIS_RT=5
+                x=controller.get_axis(AXIS_LX)
+                y=-1*controller.get_axis(AXIS_LY)
+                rx=controller.get_axis(AXIS_RX)
+                ry=-1*controller.get_axis(AXIS_RY)
+                if x>0:
+                    x=x*(32768/32767)
+                if y<0:
+                    y=y*(32768/32767)
+                if rx>0:
+                    rx=rx*(32768/32767)
+                if ry<0:
+                    ry=ry*(32768/32767)
+                if abs(x)<deadzone:
+                    x=0
+                if abs(y)<deadzone:
+                    y=0
+                if abs(rx)<deadzone:
+                    rx=0
+                if abs(ry)<deadzone:
+                    ry=0
+                lt=controller.get_axis(AXIS_LT)
+                rt=controller.get_axis(AXIS_RT)
+                if lt>0:
+                    lt=min(lt*(32768/32767), 1)
+                if rt>0:
+                    rt=min(rt*(32768/32767), 1)
+                lt=(lt+1)/2
+                rt=(rt+1)/2
+                if rt>0 and lt==0:
+                    acc=rt
+                elif lt>0:
+                    acc=-1*lt
                 else:
-                    set_vibration(0, max(0, -1*acc*(max(0, car.speed)/20)/2), max(0, -1*acc*(max(0, car.speed)/20)))
-            else:
-                set_vibration(0, 0, 0)
-            if get_button_values(get_state(0))['BACK']:
-                car.sound.stop_sound()
-                emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
-                emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
-                car.speed=0
-                DATA_OUT_FORMAT[0]['value']=0
-                DATA_OUT_FORMAT[1]['value']=8000
-                DATA_OUT_FORMAT[2]['value']=750
-                DATA_OUT_FORMAT[3]['value']=0
-                DATA_OUT_FORMAT[4]['value']=0
-                DATA_OUT_FORMAT[5]['value']=0
-                DATA_OUT_FORMAT[6]['value']=0
-                DATA_OUT_FORMAT[7]['value']=0
-                car.rpm=0
-                car.gear=0
-                stream.close()
-                audio_device.close()
-                set_vibration(0, 0, 0)
-                running = False
-                emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
-                emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
-            if get_button_values(get_state(0))['START']:
-                car.reset(0, road_width / 2)
-                timer_started = False
-                walls = track.load_walls(car.x)
-                rays = generate_rays(car.look_angle, fov, screen_width, res)
-            steering=get_thumb_values(get_state(0))[0][0]
-        for event in pg.event.get():
-            if event.type == pg.QUIT:
-                exit_program()
-            if event.type == pg.KEYDOWN and not get_connected()[0]:
-                if event.key == pg.K_ESCAPE:
+                    acc=0
+                if controller.get_hat(0)[1]==1:
+                    if acc==0:
+                        car.gear=0
+                if controller.get_hat(0)[1]==-1:
+                    if car.speed==0:
+                        car.gear=-1
+                if acc>0 and car.gear>=0:
+                    controller.rumble(max(0, acc*(max(0, (50*acc)-car.speed)/(50*acc))), max(0, acc*(max(0, (50*acc)-car.speed)/(50*acc))), 0)
+                elif acc<0:
+                    if car.speed>20:
+                        controller.rumble(1.0, 1.0, 0)
+                    else:
+                        controller.rumble(max(0, -1*acc*(max(0, car.speed)/20)/2), max(0, -1*acc*(max(0, car.speed)/20)), 0)
+                else:
+                    controller.stop_rumble()
+                if controller.get_button(BUTTON_SELECT):
+                    car.sound.stop_sound()
                     emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
                     emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
                     car.speed=0
-                    DATA_OUT_FORMAT[0]['value']=0
-                    DATA_OUT_FORMAT[1]['value']=8000
-                    DATA_OUT_FORMAT[2]['value']=750
-                    DATA_OUT_FORMAT[3]['value']=0
-                    DATA_OUT_FORMAT[4]['value']=0
-                    DATA_OUT_FORMAT[5]['value']=0
-                    DATA_OUT_FORMAT[6]['value']=0
-                    DATA_OUT_FORMAT[7]['value']=0
+                    for controller in joysticks.values():
+                        controller.stop_rumble()
+                    DATA_OUT['rpm']=0
+                    DATA_OUT['speed']=0
+                    DATA_OUT['gear']=0
+                    if address!='0.0.0.0':
+                        th=Thread(target=sock.send, args=[pickle.dumps(DATA_OUT)], daemon=True)
+                        th.start()
                     car.rpm=0
                     car.gear=0
                     stream.close()
                     audio_device.close()
-                    set_vibration(0, 0, 0)
+                    controller.stop_rumble()
+                    running = False
+                    emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
+                    emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
+                if controller.get_button(BUTTON_START):
+                    car.reset(0, road_width / 2)
+                    timer_started = False
+                    walls = track.load_walls(car.x)
+                    rays = generate_rays(car.look_angle, fov, screen_width, res)
+                steering=x
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                exit_program()
+            if event.type == pg.JOYDEVICEADDED:
+                con=joy.Joystick(event.device_index)
+                joysticks[con.get_instance_id()] = con
+            if event.type == pg.JOYDEVICEREMOVED:
+                del joysticks[event.instance_id]  
+            if event.type == pg.KEYDOWN and not joy.get_count()>0:
+                if event.key == pg.K_ESCAPE:
+                    emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
+                    emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
+                    car.speed=0
+                    DATA_OUT['rpm']=0
+                    DATA_OUT['speed']=0
+                    DATA_OUT['gear']=0
+                    if address!='0.0.0.0':
+                        th=Thread(target=sock.send, args=[pickle.dumps(DATA_OUT)], daemon=True)
+                        th.start()
+                    for controller in joysticks.values():
+                        controller.stop_rumble()
+                    car.rpm=0
+                    car.gear=0
+                    stream.close()
+                    audio_device.close()
                     running = False
                 if event.key == pg.K_UP:
                     acc=1
@@ -1628,7 +1673,7 @@ def play_game(track_distance):
                     timer_started = False
                     walls = track.load_walls(car.x)
                     rays = generate_rays(car.look_angle, fov, screen_width, res)
-            if event.type == pg.KEYUP and not get_connected()[0]:
+            if event.type == pg.KEYUP and not joy.get_count()>0:
                 if event.key == pg.K_UP:
                     acc=0
                 if event.key == pg.K_DOWN:
@@ -1637,6 +1682,12 @@ def play_game(track_distance):
                     steering=0
                 if event.key == pg.K_RIGHT:
                     steering=0
+                if event.key==pg.K_a:
+                    if acc==0:
+                        car.gear=0
+                if event.key==pg.K_z:
+                    if car.speed==0:
+                        car.gear=-1
             if event.type == load_walls:
                 walls = track.load_walls(car.x)
 
@@ -1645,19 +1696,12 @@ def play_game(track_distance):
                     res += 1
                     rays = generate_rays(car.look_angle, fov, screen_width, res)
         engine.specific_rpm(car.rpm)
-        DATA_OUT_FORMAT[3]['value']=car.rpm
-        DATA_OUT_FORMAT[4]['value']=car.speed
-        if acc>0:
-            DATA_OUT_FORMAT[5]['value']=acc
-            DATA_OUT_FORMAT[6]['value']=0
-        elif acc<0:
-            DATA_OUT_FORMAT[5]['value']=0
-            DATA_OUT_FORMAT[6]['value']=abs(acc)
-        else:
-            DATA_OUT_FORMAT[5]['value']=0
-            DATA_OUT_FORMAT[6]['value']=0
-        DATA_OUT_FORMAT[7]['value']=car.gear
-        DATA_OUT_FORMAT[8]['value']=steering
+        DATA_OUT['rpm']=car.rpm
+        DATA_OUT['speed']=round(car.speed*0.621371)
+        DATA_OUT['gear']=car.gear
+        if address!='0.0.0.0':
+            th=Thread(target=sock.send, args=[pickle.dumps(DATA_OUT)], daemon=True)
+            th.start()
         car.update(acc, steering, walls)
         if car.gear==0:
             if acc>0:
@@ -1711,28 +1755,27 @@ def play_game(track_distance):
                 timer_started = True
         # check if race finished
         if car.x > track.final_x:
+            for controller in joysticks.values():
+                controller.stop_rumble()
             emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
             emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
             car.speed=0
-            DATA_OUT_FORMAT[0]['value']=0
-            DATA_OUT_FORMAT[1]['value']=8000
-            DATA_OUT_FORMAT[2]['value']=750
-            DATA_OUT_FORMAT[3]['value']=0
-            DATA_OUT_FORMAT[4]['value']=0
-            DATA_OUT_FORMAT[5]['value']=0
-            DATA_OUT_FORMAT[6]['value']=0
-            DATA_OUT_FORMAT[7]['value']=0
+            DATA_OUT['rpm']=0
+            DATA_OUT['speed']=0
+            DATA_OUT['gear']=0
+            if address!='0.0.0.0':
+                th=Thread(target=sock.send, args=[pickle.dumps(DATA_OUT)], daemon=True)
+                th.start()
             car.rpm=0
             car.gear=0
             stream.close()
             audio_device.close()
-            set_vibration(0, 0, 0)
             car.sound.play_finish()
-            set_vibration(0, 0, 0)
-            pg.quit()
             running = False
-            set_vibration(0, 0, 0)
-            return (time.time() - race_timer)
+            try:
+                return (time.time() - race_timer)
+            except:
+                return 0
         
         # ray casting
         if (steering!=0) and (car.speed > 0 or acc<0):
@@ -1762,11 +1805,18 @@ def play_game(track_distance):
 
         # rendering text
         fps_display = font.render("FPS: " + str(int(clock.get_fps())), True, font_color)
-        gear_display=font.render("Gear: "+str(car.gear), True, font_color)
+        if car.rpm>8000:
+            gear_display=font.render(str(car.gear), True, font_redline_color)
+        else:
+            gear_display=font.render(str(car.gear), True, font_color)
         speed_display=font.render("MPH: "+str(round(car.speed*0.621371)), True, font_color)
         screen.blit(fps_display, (0, 0))
-        screen.blit(speed_display, (1040, 500))
-        screen.blit(gear_display, (1040, 470))
+        if is_fullscreen:
+            screen.blit(speed_display, (screen_width - 290, screen_height -100))
+            screen.blit(gear_display, (screen_width - 250, screen_height - 130))
+        else:
+            screen.blit(speed_display, (1040, 500))
+            screen.blit(gear_display, (1075, 470))
         screen.blit(title_text, title_rect)
 
         if timer_started:
@@ -1775,40 +1825,47 @@ def play_game(track_distance):
         
         pg.display.flip()
 def crash_vibration():
-        set_vibration(0, 1.0, 1.0)
-        time.sleep(0.2)
-        set_vibration(0, 0, 0)
+        for controller in joysticks.values():
+            controller.rumble(1.0, 1.0, 200)
 def exit_program():
+    for controller in joysticks.values():
+        controller.stop_rumble()
+    joy.quit()
     pg.quit()
-    set_vibration(0, 0, 0)
-    DATA_OUT_FORMAT[0]['value']=0
-    DATA_OUT_FORMAT[1]['value']=0
-    DATA_OUT_FORMAT[2]['value']=0
-    DATA_OUT_FORMAT[3]['value']=0
-    DATA_OUT_FORMAT[4]['value']=0
-    DATA_OUT_FORMAT[5]['value']=0
-    DATA_OUT_FORMAT[6]['value']=0
-    DATA_OUT_FORMAT[7]['value']=0
+    DATA_OUT['rpm']=0
+    DATA_OUT['speed']=0
+    DATA_OUT['gear']=0
+    if address!='0.0.0.0':
+        sock.send(pickle.dumps(DATA_OUT))
     emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
     emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
-    os._exit(0)
+    sys.exit(0)
 if __name__ == "__main__":
     emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
     emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
     CreateKeyEx(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver\Car Racing 3D', reserved=0)
-    if get_connected()[0]:
-        set_vibration(0, 0, 0)
     try:
         port=QueryValueEx(OpenKey(OpenKey(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver', reserved=0, access=KEY_ALL_ACCESS), 'Car Racing 3D', reserved=0, access=KEY_ALL_ACCESS), 'Port')[0]
         address=QueryValueEx(OpenKey(OpenKey(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver', reserved=0, access=KEY_ALL_ACCESS), 'Car Racing 3D', reserved=0, access=KEY_ALL_ACCESS), 'UDPAddr')[0]
-    except OSError:
+        deadzone=QueryValueEx(OpenKey(OpenKey(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver', reserved=0, access=KEY_ALL_ACCESS), 'Car Racing 3D', reserved=0, access=KEY_ALL_ACCESS), 'SteeringDeadZone')[0]/32767
+        is_fullscreen=bool(QueryValueEx(OpenKey(OpenKey(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver', reserved=0, access=KEY_ALL_ACCESS), 'Car Racing 3D', reserved=0, access=KEY_ALL_ACCESS), 'FullScreen')[0])
+    except (OSError, NameError):
+        if tkinter_available:
+            messagebox.showwarning('Resetting to default...', 'Registry read error. Resetting to defaults...')
+        else:
+            print('Registry read error. Resetting to defaults...')
         port=9999
         address='0.0.0.0'
+        deadzone=7000/32767
+        is_fullscreen=False
         SetValueEx(OpenKey(OpenKey(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver', reserved=0, access=KEY_ALL_ACCESS), 'Car Racing 3D', reserved=0, access=KEY_ALL_ACCESS), 'Port', 0, REG_DWORD, 9999)
         SetValueEx(OpenKey(OpenKey(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver', reserved=0, access=KEY_ALL_ACCESS), 'Car Racing 3D', reserved=0, access=KEY_ALL_ACCESS), 'UDPAddr', 0, REG_SZ, '0.0.0.0')
+        SetValueEx(OpenKey(OpenKey(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver', reserved=0, access=KEY_ALL_ACCESS), 'Car Racing 3D', reserved=0, access=KEY_ALL_ACCESS), 'SteeringDeadZone', 0, REG_DWORD, 7000)
+        SetValueEx(OpenKey(OpenKey(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver', reserved=0, access=KEY_ALL_ACCESS), 'Car Racing 3D', reserved=0, access=KEY_ALL_ACCESS), 'FullScreen', 0, REG_DWORD, 0)
     hostname=socket.gethostname()
     IP=socket.gethostbyname(hostname)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.connect((address, port))
     try:
         import pyi_splash
         pyi_splash.update_text('UI Loaded ...')
