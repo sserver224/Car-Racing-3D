@@ -1,2 +1,3 @@
 # Car-Racing-3D (B Branch)
-Arriving on Christmas! Hang tight!
+Now released! v0.7B
+Ho Ho Ho! Merry Christmas!
