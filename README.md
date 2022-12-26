@@ -8,4 +8,4 @@ Coming Up in v1.0: Forza Telemetry Dashboard Support, Enemy Cars, More sound FX
 
 WARNING: Disconnecting internet while the game is running will crash it. To run without internet, disconnect internet prior to launching the game.
 
-Controller support is cross-platform for versions v0.7 and later. For earlier versions, controller support is Windows exclusive.
+Controller support is cross-platform for versions 0.7 and later. For earlier versions, controller support is Windows exclusive.
