@@ -1,5 +1,5 @@
 # Car-Racing-3D (A Branch)
-A 3D Racing game made in Pygame. Supports XInput and engine sound generator apps (like RevHeadz).
+A 3D Racing game made in Pygame. Supports controller input and engine sound generator apps (like RevHeadz).
 
 RevHeadz support demo:
 [![Watch the video](https://img.youtube.com/vi/G8Tpi-R12pM/maxresdefault.jpg)](https://youtu.be/G8Tpi-R12pM)
