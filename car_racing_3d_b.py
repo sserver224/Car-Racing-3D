@@ -5,17 +5,798 @@ import engine
 from engine.events import *
 from engine.operators import *
 from engine.types import *
+import numpy as np
+import pyaudio
+import sys
 from elm import *
 from elm import plugins
-emulator=elm.Elm()
-emulator.net_port=35000
-emulator.scenario='car'
-r=Thread(target=emulator.run)
-r.daemon=True
-r.start()
-emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * 0)</exec><writeln />'
-emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int(4 * 0)</exec><writeln />'
-set_deadzone(DEADZONE_TRIGGER, 1)
+from winreg import *
+from tkinter import messagebox
+stream=None
+audio_device=None
+import socket
+import struct
+data_dict={}
+# Reading data and assigning names to data types in data_types dict
+data_types = {}
+f="""s32 IsRaceOn
+u32 TimestampMS
+f32 EngineMaxRpm
+f32 EngineIdleRpm
+f32 CurrentEngineRpm
+f32 AccelerationX
+f32 AccelerationY
+f32 AccelerationZ
+f32 VelocityX
+f32 VelocityY
+f32 VelocityZ
+f32 AngularVelocityX
+f32 AngularVelocityY
+f32 AngularVelocityZ
+f32 Yaw
+f32 Pitch
+f32 Roll
+f32 NormalizedSuspensionTravelFrontLeft
+f32 NormalizedSuspensionTravelFrontRight
+f32 NormalizedSuspensionTravelRearLeft
+f32 NormalizedSuspensionTravelRearRight
+f32 TireSlipRatioFrontLeft
+f32 TireSlipRatioFrontRight
+f32 TireSlipRatioRearLeft
+f32 TireSlipRatioRearRight
+f32 WheelRotationSpeedFrontLeft
+f32 WheelRotationSpeedFrontRight
+f32 WheelRotationSpeedRearLeft
+f32 WheelRotationSpeedRearRight
+s32 WheelOnRumbleStripFrontLeft
+s32 WheelOnRumbleStripFrontRight
+s32 WheelOnRumbleStripRearLeft
+s32 WheelOnRumbleStripRearRight
+f32 WheelInPuddleDepthFrontLeft
+f32 WheelInPuddleDepthFrontRight
+f32 WheelInPuddleDepthRearLeft
+f32 WheelInPuddleDepthRearRight
+f32 SurfaceRumbleFrontLeft
+f32 SurfaceRumbleFrontRight
+f32 SurfaceRumbleRearLeft
+f32 SurfaceRumbleRearRight
+f32 TireSlipAngleFrontLeft
+f32 TireSlipAngleFrontRight
+f32 TireSlipAngleRearLeft
+f32 TireSlipAngleRearRight
+f32 TireCombinedSlipFrontLeft
+f32 TireCombinedSlipFrontRight
+f32 TireCombinedSlipRearLeft
+f32 TireCombinedSlipRearRight
+f32 SuspensionTravelMetersFrontLeft
+f32 SuspensionTravelMetersFrontRight
+f32 SuspensionTravelMetersRearLeft
+f32 SuspensionTravelMetersRearRight
+s32 CarOrdinal
+s32 CarClass
+s32 CarPerformanceIndex
+s32 DrivetrainType
+s32 NumCylinders
+hzn HorizonPlaceholder
+f32 PositionX
+f32 PositionY
+f32 PositionZ
+f32 Speed
+f32 Power
+f32 Torque
+f32 TireTempFrontLeft
+f32 TireTempFrontRight
+f32 TireTempRearLeft
+f32 TireTempRearRight
+f32 Boost
+f32 Fuel
+f32 DistanceTraveled
+f32 BestLap
+f32 LastLap
+f32 CurrentLap
+f32 CurrentRaceTime
+u16 LapNumber
+u8 RacePosition
+u8 Accel
+u8 Brake
+u8 Clutch
+u8 HandBrake
+u8 Gear
+s8 Steer
+s8 NormalizedDrivingLine
+s8 NormalizedAIBrakeDifference"""
+lines = f.split('\n')
+for line in lines:
+    data_types[line.split()[1]] = line.split()[0]
+    data_dict[line.split()[1]]=0
+# Assigning sizes in bytes to each variable type
+jumps = {
+    's32': 4,
+    'u32': 4,
+    'f32': 4,
+    'u16': 2,
+    'u8': 1,
+    's8': 1,
+    'hzn': 12
+}
+
+def encode_data(data_dict):
+    encoded_data = b''
+    
+    for variable_name, variable_value in data_dict.items():
+        d_type = data_types[variable_name]
+        jump = jumps[d_type]
+
+        if d_type == 's32':
+            encoded_data += variable_value.to_bytes(jump, byteorder='little', signed=True)
+        elif d_type == 'u32':
+            encoded_data += variable_value.to_bytes(jump, byteorder='little', signed=False)
+        elif d_type == 'f32':
+            encoded_data += struct.pack('f', variable_value)
+        elif d_type == 'u16':
+            encoded_data += struct.pack('H', variable_value)
+        elif d_type == 'u8':
+            encoded_data += struct.pack('B', variable_value)
+        elif d_type == 's8':
+            encoded_data += struct.pack('b', variable_value)
+
+    return encoded_data
+def sine_wave_note(frequency, duration):
+    '''
+    Creates audio buffer representing a sine-wave
+    frequency: Hz
+    duration: seconds
+    '''
+    global sample_rate
+    elements = math.ceil(duration * sample_rate)
+    timesteps = np.linspace(start=0, stop=duration, num=elements, endpoint=False)
+    return np.sin(frequency * timesteps * 2 * np.pi)
+
+def sawtooth_wave_note(frequency, duration):
+    '''
+    Creates audio buffer representing a sine-wave
+    frequency: Hz
+    duration: seconds
+    '''
+    global sample_rate
+    elements = math.ceil(duration * sample_rate)
+    timesteps = np.linspace(start=0, stop=duration, num=elements, endpoint=False)
+    print(timesteps)
+    timesteps = timesteps.tolist()
+    timesteps = [1-((x * frequency * 2 * np.pi)%1) for x in timesteps]
+    timesteps = np.array(timesteps)
+    return frequency * timesteps * 2 * np.pi
+
+def random_wave_note(frequency, duration):
+    '''
+    Creates audio buffer representing a sine-wave
+    frequency: Hz
+    duration: seconds
+    '''
+    global sample_rate
+    elements = math.ceil(duration * sample_rate)
+    timesteps = np.linspace(start=0, stop=duration, num=elements, endpoint=False)
+    return np.array([float(x%1)-1 for x in range(len(timesteps))])
+
+def silence(duration):
+    '''
+    Creates audio buffer representing silence
+    duration: seconds
+    '''
+    global sample_rate
+    elements = math.ceil(duration * sample_rate)
+    return np.zeros(elements)
+
+def v_twin_90_deg():
+    '''Suzuki SV650/SV1000, Yamaha MT-07'''
+    return Engine(
+        idle_rpm=1000,
+        limiter_rpm=10500,
+        strokes=4,
+        cylinders=2,
+        timing=[270, 450],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_twin_60_deg():
+    return Engine(
+        idle_rpm=1100,
+        limiter_rpm=10500,
+        strokes=4,
+        cylinders=2,
+        timing=[300, 420],        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_twin_45_deg():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=2,
+        timing=[315, 405],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_4():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7800,
+        strokes=4,
+        cylinders=4,
+        timing=[180, 180, 180, 180],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_7():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7800,
+        strokes=4,
+        cylinders=7,
+        timing=[103, 103, 103, 103, 103, 103, 102],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_6():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7800,
+        strokes=4,
+        cylinders=6,
+        timing=[120, 120, 120, 120, 120, 120],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+def v_8_LR():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=8,
+        timing=[90]*8,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_8_LS():
+    return Engine(
+        idle_rpm=600,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=8,
+        timing=[180, 270, 180, 90, 180, 270, 180, 90],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_8_FP():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=8,
+        timing=[180]*8,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_8_FP_TVR():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=8,
+        timing=[75]*8,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def w_16():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=16,
+        timing=[27, 90-27, 27, 180-117, 27, 270-207, 27, 360-297, 27, 90-27, 27, 180-117, 27, 270-207, 27, 360-297],
+        #timing=[180, 270, 180, 90],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_9():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=9,
+        timing=[80]*9,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_1():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=1,
+        timing=[720],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_7_4_3():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=7,
+        timing=[180, 90, 180, 270]+[240]*3,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_16():
+    whynot=16
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7000,
+        strokes=4,
+        cylinders=whynot,
+        timing=[720/whynot]*whynot,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_5():
+    whynot=5
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=whynot,
+        timing=[720/whynot]*whynot,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_any():
+    whynot=5
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=whynot,
+        timing=[720/whynot]*whynot,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_5_crossplane():
+    whynot=5
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=whynot,
+        timing=[180, 90, 180, 90, 180],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_4_uneven_firing():
+    whynot=4
+    mini = 170
+    maxi = 190
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7800,
+        strokes=4,
+        cylinders=whynot,
+        timing=[rd.uniform(mini, maxi), rd.uniform(mini, maxi), rd.uniform(mini, maxi), rd.uniform(mini, maxi)],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def boxer_4_crossplane_custom(rando=[0]*4):  #wrx
+    whynot=4
+    because=180
+    #because=rando
+    return Engine(
+        idle_rpm=750,
+        limiter_rpm=6700,
+        strokes=4,
+        cylinders=whynot,
+        timing=[because, 360-because]*2,
+        #timing = [180, 270, 180, 90],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1),
+        unequal=rando
+    )
+
+def boxer_4_half():
+    whynot=2
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=6700,
+        strokes=4,
+        cylinders=whynot,
+        timing=[180, 720-180],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def random():
+    #whynot=rd.choice([4, 8, 16])
+    whynot=4
+    print(whynot)
+    randlist = []
+    for i in range(whynot):
+        rando = randrange(int(360/5/whynot), int(1440/5/whynot))*5
+    randlist = [randrange(int(360/5/whynot), int(1440/5/whynot))*5 for x in range(whynot)]
+    print(randlist)
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=whynot,
+        timing=randlist,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def v_four_90_deg():
+    return Engine(
+        idle_rpm=1100,
+        limiter_rpm=16500,
+        strokes=4,
+        cylinders=4,
+        timing=[180, 90, 180, 270],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def fake_rotary_2rotor():
+    difference = 60
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=8300,
+        strokes=2,
+        cylinders=2,
+        #timing=[90, 720-90],
+        timing = [difference, 720-difference],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def inline_4_1_spark_plug_disconnected():
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=7800,
+        strokes=4,
+        cylinders=3,
+        timing=[180, 360, 180],
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1)
+    )
+
+def V_12(rando=[0]*12):
+    return Engine(
+        idle_rpm=800,
+        limiter_rpm=9000,
+        strokes=4,
+        cylinders=12,
+        timing=[60]*12,
+        fire_snd=_fire_snd,
+        between_fire_snd=silence(1),
+        unequal=rando
+    )
+
+class Stopwatch:
+        def __init__(self):
+                self.start_time=time.time()
+        def reset(self):
+                self.start_time=time.time()
+        def get_time(self):
+                return time.time()-self.start_time
+'''Basic simulation of engine for purposes of audio generation'''
+sample_rate = 44100
+max_16bit = 2**(16-1)-1  # 32,767
+
+# added by omar
+sound_merge_method = "average"  # max or average
+
+import math
+
+class AudioDevice:
+    def __init__(self):
+        self._pyaudio = pyaudio.PyAudio()
+
+    def close(self):
+        self._pyaudio.terminate()
+
+    def play_stream(self, callback):
+        global sample_rate
+        def callback_wrapped(in_data, frame_count, time_info, status_flags):
+            return (callback(frame_count), pyaudio.paContinue)
+
+        return self._pyaudio.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=sample_rate,
+            output=True,
+            stream_callback=callback_wrapped
+        )
+
+def concat(bufs):
+    return np.hstack(bufs)
+
+def overlay(bufs):
+    assert type(bufs) == list and len(bufs), 'bufs must be a non-empty list'
+    assert all(len(bufs[0]) == len(buf) for buf in bufs), 'All buffers must have the same length'
+
+    bufs = [np.copy(buf) for buf in bufs]
+    for buf in bufs:
+        #print(buf)
+        buf / len(bufs)
+
+    out_buf = np.sum(bufs, axis=0)
+    normalize_volume(out_buf)
+
+    return out_buf
+
+def pad_with_zeros(buf, num_zeros):
+    if num_zeros == 0:
+        return buf
+
+    return concat([
+        buf,
+        np.zeros(num_zeros)
+    ])
+
+def normalize_volume(buf, loudest_sample=None):
+    '''Makes the loudest sample in the buffer use the max_16bit volume. No clipping'''
+    buf *= np.int32(max_16bit / (loudest_sample or find_loudest_sample(buf)))
+
+def exponential_volume_dropoff(buf, duration, base):
+    global sample_rate
+    num_samples = math.ceil(duration * sample_rate)
+    zeros_required = len(buf) - num_samples
+
+    unpadded_curve = base / np.logspace(1, 10, num=num_samples, base=base)
+    dropoff_curve = pad_with_zeros(unpadded_curve, zeros_required)
+
+    buf *= dropoff_curve
+
+def find_loudest_sample(buf):
+    return np.max(np.abs(buf))
+
+def aslice(buf, duration):
+    '''Take slice of audio buffers based on the duration of sound required'''
+    global sample_rate
+    if duration <= 0:
+        return []
+    num_samples = math.ceil(duration * sample_rate)
+    return buf[:num_samples]
+
+def in_playback_format(buf):
+    return buf.astype(np.int16)
+def _convert_timing_format(timing):
+    # Convert timing format from standard format to our internal format.
+    # Standard format: each element is the number of crankshaft degrees that cylinder should wait
+    #   to fire after the _previous_ cylinder fires
+    # Internal format: each element is the number of crankshaft degrees that cylinder should wait
+    #   to fire after the _first_ cylinder fires
+    timing[0] = 0 # we automatically wait for crank to finish rotation before coming back to first cylinder
+    for i in range(1, len(timing)):
+        timing[i] += timing[i-1]
+
+class Engine:
+    def __init__(self, idle_rpm, limiter_rpm, strokes, cylinders, timing, fire_snd, between_fire_snd, unequal=[]):
+        '''
+        Note: all sounds used will be concatenated to suit engine run speed.
+        Make sure there's excess audio data available in the buffer.
+
+        idle_rpm: engine speed at idle
+        limiter_rpm: engine speed at rev limiter
+        strokes: number of strokes in full engine cycle, must be 2 or 4 (new: 3 for rotary)
+        cylinders: number of cylinders in engine
+        timing: array where each element is the number of crankshaft degrees that cylinder should wait
+          to fire after the previous cylinder fires. See engine_factory.py for examples
+        fire_snd: sound engine should make when a cylinder fires
+        between_fire_snd: sound engine should make between cylinders firing
+        '''
+        global sample_rate
+        # Audio library will request a specific number of samples, but we can't simulate partial engine
+        # revolutions, so we buffer whatever we have left over. We start with some zero samples to stop
+        # the pop as the audio device opens.
+        self._audio_buffer = np.zeros([256])
+
+        self._rpm = idle_rpm
+        self.idle_rpm = idle_rpm
+        self.limiter_rpm = limiter_rpm
+
+        #assert strokes in (2, 4), 'strokes not in (2, 4), see docstring'
+        self.strokes = strokes
+
+        assert cylinders > 0, 'cylinders <= 0'
+        self.cylinders = cylinders
+
+        assert len(timing) == cylinders, 'len(timing) != cylinders, see docstring'
+        self.timing = timing
+        _convert_timing_format(self.timing)
+
+        assert type(fire_snd) == np.ndarray and \
+               type(between_fire_snd) == np.ndarray, \
+            'Sounds should be passed in as numpy.ndarray buffers'
+        assert len(fire_snd) >= sample_rate * 1 and \
+               len(between_fire_snd) >= sample_rate * 1, \
+            'Ensure all audio buffers contain at least 1 second of data, see docstring'
+        self.fire_snd = fire_snd
+        self.between_fire_snd = between_fire_snd
+        
+        #added by omar
+        if not unequal:
+            unequal = [0]*cylinders
+        self.unequal = unequal
+
+        self.unequalmore = []
+        self.previousms = 0
+
+    def _gen_audio_one_engine_cycle(self):
+        global sound_merge_method
+        # Calculate durations of fire and between fire events
+        strokes_per_min = self._rpm * 2 # revolution of crankshaft is 2 strokes
+        strokes_per_sec = strokes_per_min / 60
+        sec_between_fires = self.strokes / strokes_per_sec
+        fire_duration = sec_between_fires / self.strokes # when exhaust valve is open
+        between_fire_duration = sec_between_fires / self.strokes * (self.strokes-1) # when exhaust valve is closed
+
+        # Generate audio buffers for all of the cylinders individually
+        bufs = []
+        bufsunequal = []
+        fire_snd = aslice(self.fire_snd, fire_duration)
+        for cylinder in range(0, self.cylinders):
+            unequalms = (
+                self.unequal[cylinder]/1000  # unequal converted from milliseconds to seconds
+                if self.unequal[cylinder] > 0  # if unequal set
+                #else self.unequal[cylinder]  # else 0
+                else 0
+            )
+            #unequalms = min(unequalms, (self.timing[cylinder] / 180) * 2 / strokes_per_sec)
+            before_fire_duration = (self.timing[cylinder] / 180) / strokes_per_sec# + unequalms # 180 degrees crankshaft rotation per stroke
+            before_fire_snd = aslice(self.between_fire_snd, before_fire_duration+unequalms)
+            after_fire_duration = between_fire_duration - before_fire_duration # - unequalms
+            after_fire_snd = aslice(self.between_fire_snd, after_fire_duration)
+            #print(len(audio_tools.concat([before_fire_snd, fire_snd, after_fire_snd])))
+            if len(self.unequalmore):
+                bufsunequal.append(np.array(self.unequalmore))
+            if unequalms:  # if unequal parameter set for cylinder
+                #print("unequal")
+                bufs.append(  # add to buffer
+                    np.array(  # make array
+                        [0]*len(  # a tring of 0s the length of
+                            concat(
+                                [
+                                    aslice(
+                                        self.between_fire_snd,
+                                        before_fire_duration
+                                    ),  # silence as long as before_fire_duration (in seconds)
+                                    fire_snd,
+                                    after_fire_snd
+                                ]  # complete combustion sound including before and after
+                            )
+                        )
+                    )
+                )
+                #if self.previousms != unequalms:  # unequal ms different from previous cylinder
+                before_fire_snd = aslice(
+                    self.between_fire_snd, # silence
+                    before_fire_duration + unequalms# - self.previousms  # current duration plus difference between unequals
+                )  # make interval before sound smaller
+                bufsunequal.append(
+                    concat(
+                        [before_fire_snd, fire_snd, after_fire_snd]  # combustion + silence
+                    )
+                )  # add generated combustion to unequal buffer
+                self.previousms = unequalms  # make current unequalms the new previousms
+            else:
+                #forgot what this was for, probly before separate buffers
+                """if self.unequaldelay > len(audio_tools.concat([before_fire_snd, fire_snd, after_fire_snd])):
+
+                    self.unequaldelay -= len(audio_tools.concat([before_fire_snd, fire_snd, after_fire_snd]))
+                else:
+                    bufsunequal.append(
+                        np.array(  # make numpy array of
+                            [0]*(  # a list of 0s with the amount of 0s equal to
+                                len(  # the length of
+                                    audio_tools.slice(self.between_fire_snd, self.unequaldelay)  # silence as long as unequal offset
+                                ) 
+                                - 
+                                len(
+                                    audio_tools.concat([before_fire_snd, fire_snd, after_fire_snd])
+                                )
+                            )
+                        )
+                    )"""
+                bufsunequal.append(
+                    np.array(
+                        [0]*len(
+                            concat(
+                                [before_fire_snd, fire_snd, after_fire_snd]  # combustion + silence
+                            )
+                        )
+                    )
+                )  # add silence to unequal buffer
+                bufs.append(
+                    concat(
+                        [before_fire_snd, fire_snd, after_fire_snd]  # combustion + silence
+                    )
+                )  # add combustion package to equal buffer
+
+        # combine both lists
+        #print(len(bufs))
+        #print("nextone")
+        #print(len(bufsunequal))
+        #bufs = list(np.maximum(bufs, bufsunequal))
+        # Make sure all buffers are the same length (may be off by 1 because of rounding issues)
+        
+        max_buf_len = len(max(bufs, key=len))
+        bufs = [pad_with_zeros(buf, max_buf_len-len(buf)) for buf in bufs]
+        
+        # same thing as before but with unequal buffer
+
+        max_buf_len_unequal = len(max(bufsunequal, key=len))
+        #print(max_buf_len)
+        #might not be good idea with unequal, since that's how the unequalness is made
+        bufsunequal = [pad_with_zeros(buf, max_buf_len_unequal-len(buf)) for buf in bufsunequal]
+
+        # Combine all the cylinder sounds
+        engine_snd = overlay(bufs)  # not sure
+        engine_snd_unequal = overlay(bufsunequal)  # not sure
+        #print(len(engine_snd), len(engine_snd_unequal))
+        if sum(engine_snd_unequal) > 0:  # if unequal buffer contains anything
+            if sound_merge_method == "average":  # average of both buffers
+                engine_snd = np.mean([engine_snd, engine_snd_unequal[:len(engine_snd)]], axis=0)
+            elif sound_merge_method == "max":  # maximum values of both buffers
+                engine_snd = np.maximum(engine_snd, engine_snd_unequal[:len(engine_snd)])
+        if len(engine_snd_unequal) > len(engine_snd):  # if unequal buffer is longer than 
+            self.unequalmore = engine_snd_unequal[len(engine_snd):]
+        return in_playback_format(engine_snd)
+
+    def gen_audio(self, num_samples):
+        '''Return `num_samples` audio samples representing the engine running'''
+        # If we already have enough samples buffered, just return those
+        if num_samples < len(self._audio_buffer):
+            buf = self._audio_buffer[:num_samples]
+            self._audio_buffer = self._audio_buffer[num_samples:]
+            return buf
+
+        # Generate new samples. If we still don't have enough, loop what we generated
+        engine_snd = self._gen_audio_one_engine_cycle()
+        while len(self._audio_buffer) + len(engine_snd) < num_samples:
+            engine_snd = concat([engine_snd, engine_snd]) # this is unlikely to run more than once
+
+        # Take from the buffer first, and use new samples to make up the difference
+        # Leftover new samples become the audio buffer for the next run
+        num_new_samples = num_samples - len(self._audio_buffer)
+        buf = concat([self._audio_buffer, engine_snd[:num_new_samples]])
+        #assert len(buf) == num_samples, (f'${num_samples} requested, but ${len(buf)} samples provided, from ' +
+            #f'${len(self._audio_buffer)} buffered samples and ${num_new_samples} new samples')
+        self._audio_buffer = engine_snd[num_new_samples:]
+        return buf
+    def specific_rpm(self, speed):  # TODO
+        self._rpm=speed
+_fire_snd = sine_wave_note(frequency=160, duration=1)
+normalize_volume(_fire_snd)
+exponential_volume_dropoff(_fire_snd, duration=0.06, base=5)
+eng=None
+
 @sprite('Stage')
 class Stage(Target):
     """Sprite Stage"""
@@ -35,7 +816,7 @@ class Stage(Target):
            0, 100, "None", [
             {
                 'name': "backdrop1",
-                'path': "0c4f8f7ed52426227d3b74fb2c25d29c.png",
+                'path': "8872c041882aeb77e2c551a5f7a4f561.png",
                 'center': (480, 360),
                 'scale': 2
             }
@@ -59,19 +840,39 @@ class Stage(Target):
         self.var_SOUND_ID = 0
         self.var_SOUND_ = 0
         self.var_IsAccellerating = 0
-        self.var_tick = 1326
+        self.var_tick = 764
         self.var_car_slide = 0
         self.var_LapTime = "00:00.00"
         self.var_LastLap = ""
-        self.var_RPM = 750
-        self.var_GEAR = 1
-        self.var_MaxRpm = 7500
-        self.var_KMH = 0
-        self.var_CHANGE = 0
-        self.var_ON = 1
+        self.var_engine = 0
+        self.var_rpm = 0
         self.var_DMODE = 2
+        self.var_RPM = 750
+        self.var_gear = 0
+        self.var_ON = 1
+        self.var_OIL = "-6.175615574477433e-16"
+        self.var_DURABILITY = -54
+        self.var_CHANGE = 0
+        self.var_GEAR = 1
+        self.var_KMH = 0
+        self.var_MaxRpm = 7500
+        self.var_FUEL = 0
         self.var_Gearbox = 0
+        self.var_RPMangle = 74.80952380952382
+        self.var_PedalHold = 0
+        self.var_EngineOnOff = 1
+        self.var_Override = 0
+        self.var_EngineFailure = 0
+        self.var_Gear = "N"
+        self.var_Failures = "None"
+        self.var_EngineType = "V8"
+        self.var_Turbopressure = 85
+        self.var_DynoToggle = 0
+        self.var_time_hold = 0.297
+        self.var_touchinggrass = 0
         self.var_steering = 0
+        self.var_gas = 0
+        self.var_brake = 0
 
         self.list_Grass1 = List(
             [-178, -178, -174, -174, -170, -170, -166, -166, -162, -162, -158, -158, -154, -154, -150, -150, -146, -146, -142, -142, -138, -138, -134, -134, -130, -130, -126, -126, -122, -122, -18, -18, -14, -14, -10, -10, -6, -6, -2, -2, 2, 2, 6, 6, 10, 10, 30, 30, 34, 34, 38, 38, 50, 50]
@@ -86,13 +887,13 @@ class Stage(Target):
             [-477.6, 477.6, -472.8, 472.8, -468, 468, -463.20000000000005, 463.20000000000005, -458.4, 458.4, -453.6, 453.6, -448.8, 448.8, -444, 444, -439.2, 439.2, -434.4, 434.4, -429.6, 429.6, -424.8, 424.8, -420, 420, -415.20000000000005, 415.20000000000005, -410.4, 410.4, -405.6, 405.6, -400.79999999999995, 400.79999999999995, -396, 396, -391.2, 391.2, -386.4, 386.4, -381.6, 381.6, -376.8, 376.8, -372, 372, -367.2, 367.2, -362.4, 362.4, -319.20000000000005, 319.20000000000005, -314.4, 314.4, -309.6, 309.6, -304.8, 304.8, -285.6, 285.6, -280.8, 280.8, -271.2, 271.2, -266.4, 266.4]
         )
         self.list_CarsX = List(
-            [112]
+            [54]
         )
         self.list_CarsY = List(
             [1518]
         )
         self.list_CarsPX = List(
-            [24.639999999999997, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            [11.879999999999999, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         )
         self.list_CarsPY = List(
             [-999, -999, -999, -999, -999, -999, -999, -999, -999, -999]
@@ -275,6 +1076,12 @@ class SpriteGame(Target):
                 'path': "f2cbd2f6f5251c3b9542605bfb3834b7.png",
                 'center': (40, 49),
                 'scale': 2
+            },
+            {
+                'name': "explosion",
+                'path': "1f31f66bc7126673d4ab9c140e786822-fallback.png",
+                'center': (47, 58),
+                'scale': 1
             }
         ])
 
@@ -291,6 +1098,10 @@ class SpriteGame(Target):
             {
                 'name': "acc3",
                 'path': "ccae7ec5458f6cb504a97b52e432b854.wav"
+            },
+            {
+                'name': "crash",
+                'path': "6e86b21cf446048cde40293d3e49a3de.wav"
             }
         ])
 
@@ -316,13 +1127,17 @@ class SpriteGame(Target):
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         )
 
-        self.sprite.layer = 11
+        self.sprite.layer = 10
 
     @on_green_flag
     async def green_flag(self, util):
+        global eng
         await self.my_Init(util, )
         self.shown = True
         self.front_layer(util)
+        eng = boxer_4_crossplane_custom([1, 1, 0, 0])
+        audio_device = AudioDevice()
+        stream = audio_device.play_stream(eng.gen_audio)
         self.gotoxy(0, -120)
         await util.send_broadcast_wait("create clones")
         self.var_y = 0
@@ -339,13 +1154,6 @@ class SpriteGame(Target):
         self.var_NextLapY = (400 * len(util.sprites.stage.list_track_x))
         while True:
             await self.my_UpdateTimers(util, )
-            if util.inputs["p"]:
-                while not not util.inputs["p"]:
-                    await self.yield_()
-                while not util.inputs["p"]:
-                    await self.yield_()
-                while not not util.inputs["p"]:
-                    await self.yield_()
             self.var_y += util.sprites.stage.var_speed
             self.var_i = self.list_RoadLag[1]
             self.list_RoadLag.delete(1)
@@ -353,7 +1161,7 @@ class SpriteGame(Target):
             util.sprites.stage.var_horizon_x += (util.sprites.stage.var_speed * div(self.var_i, -50))
             util.sprites.stage.var_car_x += (util.sprites.stage.var_speed * div(self.var_i, -75))
             await self.my_Keys(util, )
-            util.sprites.stage.var_MPH = toint((util.sprites.stage.var_speed * 7))
+            util.sprites.stage.var_MPH = abs(toint((util.sprites.stage.var_speed * 7)))
             await self.my_UpdateCars(util, )
             await self.my_RoadUpdate(util, )
             await self.my_tick(util, )
@@ -364,39 +1172,14 @@ class SpriteGame(Target):
     @warp
     async def my_Keys(self, util, ):
         util.sprites.stage.var_car_x += (div(util.sprites.stage.var_speed, 4) * (util.sprites.stage.var_car_sx * div(15, (util.sprites.stage.var_speed + 10))))
-        if get_connected()[0]:
-            gas=get_trigger_values(get_state(0))[1]
-            brake=get_trigger_values(get_state(0))[0]
-            if gas>0 and brake==0:
-                util.sprites.stage.var_IsAccellerating=gas
-            elif brake>0:
-                util.sprites.stage.var_IsAccellerating=-1*brake
-            else:
-                util.sprites.stage.var_IsAccellerating=0
-            util.sprites.stage.var_steering=get_thumb_values(get_state(0))[0][0]
-        else:
-            if util.inputs["down arrow"]:
-                util.sprites.stage.var_IsAccellerating = -1
-            else:
-                if util.inputs["up arrow"]:
-                    util.sprites.stage.var_IsAccellerating = 1
-                else:
-                    util.sprites.stage.var_IsAccellerating = 0
-            if (not util.inputs["left arrow"] and util.inputs["right arrow"]):
-                util.sprites.stage.var_steering = 1
-            else:
-                if (not util.inputs["right arrow"] and util.inputs["left arrow"]):
-                    util.sprites.stage.var_steering = -1
-                else:
-                    util.sprites.stage.var_steering = 0
         if gt(abs(util.sprites.stage.var_speed), 0.01):
             if lt(util.sprites.stage.var_steering, 0):
-                util.sprites.stage.var_car_sx += (-0.4 * abs(util.sprites.stage.var_steering))
+                util.sprites.stage.var_car_sx += (0.4 * util.sprites.stage.var_steering)
             else:
                 if (gt(util.sprites.stage.var_car_slide, 0) and lt(util.sprites.stage.var_car_sx, 0)):
                     util.sprites.stage.var_car_sx += 0.2
             if gt(util.sprites.stage.var_steering, 0):
-                util.sprites.stage.var_car_sx += (0.4 * abs(util.sprites.stage.var_steering))
+                util.sprites.stage.var_car_sx += (0.4 * util.sprites.stage.var_steering)
             else:
                 if (gt(util.sprites.stage.var_car_slide, 0) and gt(util.sprites.stage.var_car_sx, 0)):
                     util.sprites.stage.var_car_sx += -0.2
@@ -415,41 +1198,32 @@ class SpriteGame(Target):
                 util.sprites.stage.var_car_slide = 30
             else:
                 util.sprites.stage.var_car_slide += -1
-        if lt(util.sprites.stage.var_IsAccellerating, 0):
-            util.sprites.stage.var_speed += (-0.27 * abs(util.sprites.stage.var_IsAccellerating))
+        if gt(util.sprites.stage.var_brake, 0):
+            util.sprites.stage.var_IsAccellerating = (-1 * util.sprites.stage.var_brake)
+            if gt(util.sprites.stage.var_speed, 0):
+                util.sprites.stage.var_speed += (-0.27 * abs(util.sprites.stage.var_IsAccellerating))
+            else:
+                pass
             util.sprites.stage.var_speed = (util.sprites.stage.var_speed * 0.99)
             if (gt(util.sprites.stage.var_speed, 10) and gt(abs(util.sprites.stage.var_car_sx), 2)):
                 util.sprites.stage.var_car_slide = 30
         else:
-            if gt(util.sprites.stage.var_IsAccellerating, 0):
-                if (eq(util.sprites.stage.var_GEAR, 2) and lt(util.sprites.stage.var_speed, 6)):
-                    util.sprites.stage.var_speed += (0.23 * util.sprites.stage.var_IsAccellerating)
-                else:
-                    if (eq(util.sprites.stage.var_GEAR, 3) and lt(util.sprites.stage.var_speed, 10)):
-                        util.sprites.stage.var_speed += (0.22 * util.sprites.stage.var_IsAccellerating)
-                    else:
-                        if (eq(util.sprites.stage.var_GEAR, 4) and lt(util.sprites.stage.var_speed, 15)):
-                            util.sprites.stage.var_speed += (0.22 * util.sprites.stage.var_IsAccellerating)
-                        else:
-                            if (eq(util.sprites.stage.var_GEAR, 5) and lt(util.sprites.stage.var_speed, 18)):
-                                util.sprites.stage.var_speed += (0.22 * util.sprites.stage.var_IsAccellerating)
-                            else:
-                                if (eq(util.sprites.stage.var_GEAR, 6) and lt(util.sprites.stage.var_speed, 22)):
-                                    util.sprites.stage.var_speed += (0.22 * util.sprites.stage.var_IsAccellerating)
-                                else:
-                                    if (eq(util.sprites.stage.var_GEAR, 7) and lt(util.sprites.stage.var_speed, 25)):
-                                        util.sprites.stage.var_speed += (0.22 * util.sprites.stage.var_IsAccellerating)
-                                    else:
-                                        if (eq(util.sprites.stage.var_GEAR, 8) and lt(util.sprites.stage.var_speed, 29)):
-                                            util.sprites.stage.var_speed += (0.22 * util.sprites.stage.var_IsAccellerating)
-                util.sprites.stage.var_speed = (util.sprites.stage.var_speed * 0.99)
+            if (gt(util.sprites.stage.var_gas, 0) and eq(util.sprites.stage.var_CHANGE, 0)):
+                util.sprites.stage.var_IsAccellerating = util.sprites.stage.var_gas
+                util.sprites.stage.var_speed += (0.22 * util.sprites.stage.var_IsAccellerating)
+                util.sprites.stage.var_speed = (util.sprites.stage.var_speed * 0.992)
             else:
+                util.sprites.stage.var_IsAccellerating = 0
                 util.sprites.stage.var_speed = (util.sprites.stage.var_speed * 0.995)
         if gt(abs(util.sprites.stage.var_car_x), 106):
             if gt(abs(util.sprites.stage.var_car_x), 132):
+                util.sprites.stage.var_touchinggrass = 1
                 util.sprites.stage.var_speed = (util.sprites.stage.var_speed * 0.98)
             else:
                 util.sprites.stage.var_speed = (util.sprites.stage.var_speed * 0.995)
+                util.sprites.stage.var_touchinggrass = 0
+        else:
+            util.sprites.stage.var_touchinggrass = 0
 
     @warp
     async def my_tick(self, util, ):
@@ -547,6 +1321,7 @@ class SpriteGame(Target):
                 self.var_NextLapY += (400 * len(util.sprites.stage.list_track_x))
                 self.var_LapTicks = 1
                 print(util.sprites.stage.var_LastLap)
+                util.send_broadcast("rickroll")
 
     @warp
     async def my_AppendTime(self, util, arg_num, arg_sep):
@@ -570,6 +1345,34 @@ class SpriteGame(Target):
         self.var_LapTicks = 0
         util.sprites.stage.var_car_slide = 0
         pass # hide variable
+
+    @on_broadcast('crash')
+    async def broadcast_crash(self, util):
+        pass
+
+    @on_broadcast('tick')
+    async def broadcast_tick(self, util):
+        if get_connected()[0]:
+            state=get_state(0)
+            trigger_values=get_trigger_values(state)
+            util.sprites.stage.var_brake, util.sprites.stage.var_gas=trigger_values
+            util.sprites.stage.var_steering=get_thumb_values(state)[0][0]
+        else:
+            if util.inputs["up arrow"]:
+                util.sprites.stage.var_gas = 1
+            else:
+                util.sprites.stage.var_gas = 0
+            if util.inputs["down arrow"]:
+                util.sprites.stage.var_brake = 1
+            else:
+                util.sprites.stage.var_brake = 0
+            if (util.inputs["left arrow"] and not util.inputs["right arrow"]):
+                util.sprites.stage.var_steering = -1
+            else:
+                if (util.inputs["right arrow"] and not util.inputs["left arrow"]):
+                    util.sprites.stage.var_steering = 1
+                else:
+                    util.sprites.stage.var_steering = 0
 
 
 @sprite('Sprite2')
@@ -659,6 +1462,203 @@ class Sprite2(Target):
         self.var_id = 999
 
 
+@sprite('sky')
+class Spritesky(Target):
+    """Sprite sky"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        if parent is not None:
+            return
+
+        self._xpos = -240
+        self._ypos = 0
+        self._direction = 90
+        self.shown = True
+        self.pen = Pen(self)
+
+        self.costume = Costumes(
+           0, 100, "all around", [
+            {
+                'name': "sky",
+                'path': "fe2f729fae25240bea43edffc158c19e.png",
+                'center': (480, 360),
+                'scale': 2
+            }
+        ])
+
+        self.sounds = Sounds(
+            100, [
+            {
+                'name': "pop",
+                'path': "83a9787d4cb6f3b7632b4ddfebf74367.wav"
+            }
+        ])
+
+
+
+
+
+        self.sprite.layer = 1
+
+    @on_green_flag
+    async def green_flag(self, util):
+        self.change_layer(util, -1000)
+        util.sprites.stage.var_horizon_x = 0
+        self.gotoxy(-240, 0)
+        self.shown = True
+
+    @on_broadcast('tick')
+    async def broadcast_tick(self, util):
+        self.xpos = ((util.sprites.stage.var_horizon_x % 480) - 240)
+
+
+@sprite('Other Cars')
+class SpriteOtherCars(Target):
+    """Sprite Other Cars"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        if parent is not None:
+            return
+
+        self._xpos = 11.879999999999999
+        self._ypos = 58
+        self._direction = 90
+        self.shown = False
+        self.pen = Pen(self)
+
+        self.costume = Costumes(
+           0, 27, "all around", [
+            {
+                'name': "red1",
+                'path': "11cc2ed9a8813dbccee85c82a69eade4.png",
+                'center': (34, 49),
+                'scale': 2
+            }
+        ])
+
+        self.sounds = Sounds(
+            100, [
+            {
+                'name': "meow",
+                'path': "83c36d806dc92327b9e7049a565c6bff.wav"
+            }
+        ])
+
+        self.var_carID = 1
+        self.var_py = -999
+        self.var_z = 370.3703703703704
+
+
+
+        self.sprite.layer = 3
+
+    @on_broadcast('create clones')
+    async def broadcast_createclones(self, util):
+        self.shown = False
+        self.var_carID = 1
+
+    @on_broadcast('tick')
+    async def broadcast_tick(self, util):
+        self.var_py = util.sprites.stage.list_CarsPY[toint(self.var_carID)]
+        if lt(self.var_py, -177):
+            self.shown = False
+        else:
+            self.gotoxy(tonum(util.sprites.stage.list_CarsPX[toint(self.var_carID)]), tonum(self.var_py))
+            self.var_z = (div(-100, (tonum(self.var_py) - 85)) * 100)
+            self.costume.size = div(10000, self.var_z)
+            self.shown = True
+
+    @on_green_flag
+    async def green_flag(self, util):
+        self.gotoxy(0, 20)
+
+    @on_broadcast('crash')
+    async def broadcast_crash(self, util):
+        self.shown = False
+
+
+@sprite('map')
+class Spritemap(Target):
+    """Sprite map"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        if parent is not None:
+            return
+
+        self._xpos = 150
+        self._ypos = 125
+        self._direction = 90
+        self.shown = True
+        self.pen = Pen(self)
+
+        self.costume = Costumes(
+           0, 35, "all around", [
+            {
+                'name': "circuit1",
+                'path': "5365defedaba0783df73887591149591.png",
+                'center': (449, 229),
+                'scale': 2
+            }
+        ])
+
+        self.sounds = Sounds(
+            100, [
+            {
+                'name': "pop",
+                'path': "83a9787d4cb6f3b7632b4ddfebf74367.wav"
+            }
+        ])
+
+        self.var_x = -107.128433125496
+        self.var_y = 65.25398084054217
+        self.var_a = 360
+        self.var_GetDirection = 119.10047741154344
+        self.var_i = 175
+        self.var_la = 360
+
+
+
+        self.sprite.layer = 11
+
+    @on_green_flag
+    async def green_flag(self, util):
+        self.gotoxy(150, 125)
+        self.direction = 90
+        self.costume.size = 35
+        self.costume.set_effect('ghost', 25)
+        self.front_layer(util)
+
+    @warp
+    async def my_GetDirection(self, util, arg_dx, arg_dy):
+        if eq(arg_dy, 0):
+            if gt(arg_dx, 0):
+                self.var_GetDirection = 90
+            else:
+                self.var_GetDirection = -90
+        else:
+            self.var_GetDirection = math.degrees(math.atan(div(arg_dx, arg_dy)))
+            if lt(arg_dy, 0):
+                if gt(arg_dx, 0):
+                    self.var_GetDirection += 180
+                else:
+                    if lt(arg_dx, 0):
+                        self.var_GetDirection += -180
+                    else:
+                        self.var_GetDirection = 180
+
+    @on_pressed('m')
+    async def key_m_pressed(self, util):
+        pass
+
+    @warp
+    async def my_Reposition(self, util, ):
+        self.gotoxy((((0 - self.var_x) * math.cos(math.radians(tonum(self.var_a)))) - ((0 - self.var_y) * math.sin(math.radians(tonum(self.var_a))))), (((0 - self.var_y) * math.cos(math.radians(tonum(self.var_a)))) + ((0 - self.var_x) * math.sin(math.radians(tonum(self.var_a))))))
+        self.direction = (0 - tonum(self.var_a))
+
+
 @sprite('fog')
 class Spritefog(Target):
     """Sprite fog"""
@@ -710,9 +1710,27 @@ class Spritefog(Target):
             }
         ])
 
+        self.var_y = 0
+        self.var_i = 0
+        self.var_psp = 0
+        self.var_yy = 0
+        self.var_z = 0
+        self.var_x1 = 0
+        self.var_x2 = 0
+        self.var_t = 0
+        self.var_road_target = 0
+        self.var_road_time = 0
+        self.var_nextCarY = 0
+        self.var_nextCar = 0
+        self.var_debug = 0
+        self.var_ecsp = 0
+        self.var_ects = 0
+        self.var_NextLapY = 0
+        self.var_LapTicks = 0
 
-
-
+        self.list_RoadLag = StaticList(
+            []
+        )
 
         self.sprite.layer = 13
 
@@ -721,347 +1739,6 @@ class Spritefog(Target):
         self.gotoxy(0, 0)
         self.shown = True
         self.front_layer(util)
-
-
-@sprite('sky')
-class Spritesky(Target):
-    """Sprite sky"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if parent is not None:
-            return
-
-        self._xpos = 0
-        self._ypos = 0
-        self._direction = 90
-        self.shown = True
-        self.pen = Pen(self)
-
-        self.costume = Costumes(
-           0, 100, "all around", [
-            {
-                'name': "sky",
-                'path': "e01832dcec3012459f0d90fad414b5cd.png",
-                'center': (477, 360),
-                'scale': 2
-            }
-        ])
-
-        self.sounds = Sounds(
-            100, [
-            {
-                'name': "pop",
-                'path': "83a9787d4cb6f3b7632b4ddfebf74367.wav"
-            }
-        ])
-
-
-
-
-
-        self.sprite.layer = 1
-
-    @on_green_flag
-    async def green_flag(self, util):
-        self.change_layer(util, -1000)
-        util.sprites.stage.var_horizon_x = 0
-        self.gotoxy(0, 0)
-        self.shown = True
-
-
-@sprite('Other Cars')
-class SpriteOtherCars(Target):
-    """Sprite Other Cars"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if parent is not None:
-            return
-
-        self._xpos = 24.639999999999997
-        self._ypos = 58
-        self._direction = 90
-        self.shown = False
-        self.pen = Pen(self)
-
-        self.costume = Costumes(
-           0, 27, "all around", [
-            {
-                'name': "red1",
-                'path': "11cc2ed9a8813dbccee85c82a69eade4.png",
-                'center': (34, 49),
-                'scale': 2
-            }
-        ])
-
-        self.sounds = Sounds(
-            100, [
-            {
-                'name': "meow",
-                'path': "83c36d806dc92327b9e7049a565c6bff.wav"
-            }
-        ])
-
-        self.var_carID = 1
-        self.var_py = -999
-        self.var_z = 370.3703703703704
-
-
-
-        self.sprite.layer = 3
-
-    @on_broadcast('create clones')
-    async def broadcast_createclones(self, util):
-        self.shown = False
-        self.var_carID = 1
-
-    @on_broadcast('tick')
-    async def broadcast_tick(self, util):
-        self.var_py = util.sprites.stage.list_CarsPY[toint(self.var_carID)]
-        if lt(self.var_py, -177):
-            self.shown = False
-        else:
-            self.gotoxy(tonum(util.sprites.stage.list_CarsPX[toint(self.var_carID)]), tonum(self.var_py))
-            self.var_z = (div(-100, (tonum(self.var_py) - 85)) * 100)
-            self.costume.size = div(10000, self.var_z)
-            self.shown = True
-
-
-@sprite('car sound')
-class Spritecarsound(Target):
-    """Sprite car sound"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if parent is not None:
-            return
-
-        self._xpos = 0
-        self._ypos = -28
-        self._direction = 90
-        self.shown = True
-        self.pen = Pen(self)
-
-        self.costume = Costumes(
-           0, 100, "all around", [
-            {
-                'name': "costume1",
-                'path': "d36f6603ec293d2c2198d3ea05109fe0.png",
-                'center': (0, 0),
-                'scale': 2
-            }
-        ])
-
-        self.sounds = Sounds(
-            50, [
-            {
-                'name': "acc1",
-                'path': "490c6e05e5d75f9d57fe1e1b49f371eb.wav"
-            },
-            {
-                'name': "acc2",
-                'path': "bc17de5e29d83a3d929541f45372c32a.wav"
-            },
-            {
-                'name': "acc3",
-                'path': "ccae7ec5458f6cb504a97b52e432b854.wav"
-            },
-            {
-                'name': "acc4",
-                'path': "efc23827662877f1e41741fac7a3bb30.wav"
-            },
-            {
-                'name': "acc5",
-                'path': "05db2b76bff08c2cad37085cfaddff14.wav"
-            },
-            {
-                'name': "acc6",
-                'path': "82bd366f9765e9030f3a9bc41873a657.wav"
-            },
-            {
-                'name': "acc7",
-                'path': "e71c3b27bef1102c8c99bf7e25320a6f.wav"
-            },
-            {
-                'name': "acc8",
-                'path': "81880bd1da37c5d33e1ed5b3d8ce2bd1.wav"
-            },
-            {
-                'name': "acc9",
-                'path': "4ce5182353cf719c1d2ef92f047424b3.wav"
-            },
-            {
-                'name': "acc10",
-                'path': "4a254cb6208731cc2681731da75408ca.wav"
-            },
-            {
-                'name': "acc11",
-                'path': "74eb3e31e149950d46ea448270dbbbc3.wav"
-            },
-            {
-                'name': "dec1",
-                'path': "8334f577133d5d8a84bbaa2a9fe6b11f.wav"
-            },
-            {
-                'name': "dec2",
-                'path': "52e71b094f9ed90423b3e6704b5c01f5.wav"
-            },
-            {
-                'name': "dec3",
-                'path': "c1444550563319a6527b2f14b536b16c.wav"
-            },
-            {
-                'name': "dec4",
-                'path': "21734617667bd081713b8712b277ae71.wav"
-            },
-            {
-                'name': "dec5",
-                'path': "fa91b3792d640449f0e8a8c302328e7e.wav"
-            },
-            {
-                'name': "dec6",
-                'path': "0159adab0bf20710a05792dc4f87bfd6.wav"
-            },
-            {
-                'name': "dec7",
-                'path': "10ab10beaf8577976fe0eb2695bccd42.wav"
-            },
-            {
-                'name': "dec8",
-                'path': "52936050425b71d1490205d17c42ead3.wav"
-            },
-            {
-                'name': "dec9",
-                'path': "a5d8fe54828dd47a3efda20237cf3564.wav"
-            },
-            {
-                'name': "dec10",
-                'path': "c930313a99d90d0f601210a5f31dba6c.wav"
-            },
-            {
-                'name': "dec11",
-                'path': "60ff4d3ea207192b47a02e5ed39258d1.wav"
-            }
-        ])
-
-        self.var_ID = 1
-
-
-
-        self.sprite.layer = 4
-
-    @on_broadcast('tick')
-    async def broadcast_tick(self, util):
-        if (eq(util.sprites.stage.var_SOUND_ID, self.var_ID) and gt(util.sprites.stage.var_tick, util.sprites.stage.var_SOUND_TICK)):
-            if gt(div(util.sprites.stage.var_speed, 1.8), util.sprites.stage.var_SOUND_):
-                util.sprites.stage.var_SOUND_ += 1
-                if gt(util.sprites.stage.var_SOUND_, 11):
-                    util.sprites.stage.var_SOUND_ = 5
-                self.sounds.play(util.sprites.stage.var_SOUND_)
-                util.sprites.stage.var_SOUND_TICK += 30
-                util.sprites.stage.var_SOUND_ID = (1 - util.sprites.stage.var_SOUND_ID)
-            else:
-                if gt(util.sprites.stage.var_speed, 0):
-                    util.sprites.stage.var_SOUND_ = math.ceil(div(util.sprites.stage.var_speed, 2))
-                    self.sounds.play((util.sprites.stage.var_SOUND_ + 11))
-                    util.sprites.stage.var_SOUND_ += -1
-                    util.sprites.stage.var_SOUND_TICK += 30
-                    util.sprites.stage.var_SOUND_ID = (1 - util.sprites.stage.var_SOUND_ID)
-
-    @on_broadcast('create clones')
-    async def broadcast_createclones(self, util):
-        self.sounds.set_volume(50)
-        self.var_ID = 0
-        self.create_clone_of(util, "_myself_")
-        self.var_ID = 1
-
-    @on_green_flag
-    async def green_flag(self, util):
-        util.sprites.stage.var_SOUND_TICK = 0
-        util.sprites.stage.var_SOUND_ID = 0
-        util.sprites.stage.var_SOUND_ = 0
-        util.sprites.stage.var_IsAccellerating = 1
-
-
-@sprite('map')
-class Spritemap(Target):
-    """Sprite map"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if parent is not None:
-            return
-
-        self._xpos = 150
-        self._ypos = 125
-        self._direction = 90
-        self.shown = True
-        self.pen = Pen(self)
-
-        self.costume = Costumes(
-           0, 35, "all around", [
-            {
-                'name': "circuit1",
-                'path': "5365defedaba0783df73887591149591.png",
-                'center': (449, 229),
-                'scale': 2
-            }
-        ])
-
-        self.sounds = Sounds(
-            100, [
-            {
-                'name': "pop",
-                'path': "83a9787d4cb6f3b7632b4ddfebf74367.wav"
-            }
-        ])
-
-        self.var_x = -107.128433125496
-        self.var_y = 65.25398084054217
-        self.var_a = 360
-        self.var_GetDirection = 119.10047741154344
-        self.var_i = 175
-        self.var_la = 360
-
-
-
-        self.sprite.layer = 12
-
-    @on_green_flag
-    async def green_flag(self, util):
-        self.gotoxy(150, 125)
-        self.direction = 90
-        self.costume.size = 35
-        self.costume.set_effect('ghost', 25)
-        self.front_layer(util)
-
-    @warp
-    async def my_GetDirection(self, util, arg_dx, arg_dy):
-        if eq(arg_dy, 0):
-            if gt(arg_dx, 0):
-                self.var_GetDirection = 90
-            else:
-                self.var_GetDirection = -90
-        else:
-            self.var_GetDirection = math.degrees(math.atan(div(arg_dx, arg_dy)))
-            if lt(arg_dy, 0):
-                if gt(arg_dx, 0):
-                    self.var_GetDirection += 180
-                else:
-                    if lt(arg_dx, 0):
-                        self.var_GetDirection += -180
-                    else:
-                        self.var_GetDirection = 180
-
-    @on_pressed('m')
-    async def key_m_pressed(self, util):
-        pass
-
-    @warp
-    async def my_Reposition(self, util, ):
-        self.gotoxy((((0 - self.var_x) * math.cos(math.radians(tonum(self.var_a)))) - ((0 - self.var_y) * math.sin(math.radians(tonum(self.var_a))))), (((0 - self.var_y) * math.cos(math.radians(tonum(self.var_a)))) + ((0 - self.var_x) * math.sin(math.radians(tonum(self.var_a))))))
-        self.direction = (0 - tonum(self.var_a))
 
 
 @sprite('map trace')
@@ -1146,42 +1823,42 @@ class Sprite_FX_Dust_0013(Target):
         self.pen = Pen(self)
 
         self.costume = Costumes(
-           5, 150, "all around", [
+           0, 150, "all around", [
             {
                 'name': "Sprite_FX_Dust_2",
-                'path': "0f0d5a66b08d76d018d1bf326401be69-fallback.png",
-                'center': (33, 17),
-                'scale': 1
+                'path': "55eda6d867b90e6b38b147a807876778.png",
+                'center': (66, 35),
+                'scale': 2
             },
             {
                 'name': "Sprite_FX_Dust_3",
-                'path': "8ee6d2d12146f96e4d25b075993febc7-fallback.png",
-                'center': (31, 16),
-                'scale': 1
+                'path': "15c553610f11c000c96c110f791ce519.png",
+                'center': (62, 33),
+                'scale': 2
             },
             {
                 'name': "Sprite_FX_Dust_4",
-                'path': "6a96b44e19bbb419df1256f27fc6a88c-fallback.png",
-                'center': (32, 17),
-                'scale': 1
+                'path': "544fa2b7ad042acbc67fe0169da64532.png",
+                'center': (64, 35),
+                'scale': 2
             },
             {
                 'name': "Sprite_FX_Dust_5",
-                'path': "7e4968ec7c083dca20ae5d893038fad5-fallback.png",
-                'center': (32, 17),
-                'scale': 1
+                'path': "1f936adf5adfb4d78d8046d79b55e7a8.png",
+                'center': (64, 35),
+                'scale': 2
             },
             {
                 'name': "Sprite_FX_Dust_6",
-                'path': "26836955e69114e50890887cb6878d2b-fallback.png",
-                'center': (33, 16),
-                'scale': 1
+                'path': "055acb33597e867db438cdd8b11b4f67.png",
+                'center': (66, 33),
+                'scale': 2
             },
             {
                 'name': "Sprite_FX_Dust_7",
-                'path': "0fcd4618e9f3356e244cfee8960171ee-fallback.png",
-                'center': (34, 16),
-                'scale': 1
+                'path': "1dba00576e07223cf13808bd54d0b24c.png",
+                'center': (69, 33),
+                'scale': 2
             }
         ])
 
@@ -1242,6 +1919,361 @@ class Sprite_FX_Dust_0013(Target):
             self.costume.size = arg_size
 
 
+@sprite('ENG-RPM')
+class SpriteENGRPM(Target):
+    """Sprite ENG-RPM"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        if parent is not None:
+            return
+
+        self._xpos = -53
+        self._ypos = -36
+        self._direction = 90
+        self.shown = True
+        self.pen = Pen(self)
+
+        self.costume = Costumes(
+           0, 100, "all around", [
+            {
+                'name': "costume1",
+                'path': "d36f6603ec293d2c2198d3ea05109fe0.png",
+                'center': (0, 0),
+                'scale': 2
+            }
+        ])
+
+        self.sounds = Sounds(
+            10, [
+
+        ])
+
+
+
+
+
+        self.sprite.layer = 4
+
+    @on_green_flag
+    async def green_flag(self, util):
+        util.sprites.stage.var_GEAR = 1
+        util.sprites.stage.var_MaxRpm = 7500
+
+    @on_broadcast('crash')
+    async def broadcast_crash(self, util):
+        self.stop_other()
+        util.sprites.stage.var_RPM = 0
+
+    @on_broadcast('tick')
+    async def broadcast_tick(self, util):
+        global eng, start_time, address, data_dict
+        if eq(util.sprites.stage.var_CHANGE, 0):
+            if eq(util.sprites.stage.var_GEAR, 1):
+                if (eq(util.sprites.stage.var_IsAccellerating, 1) and lt(util.sprites.stage.var_RPM, util.sprites.stage.var_MaxRpm)):
+                    util.sprites.stage.var_RPM += 416
+                else:
+                    if gt(util.sprites.stage.var_RPM, 750):
+                        util.sprites.stage.var_RPM += -97
+            if eq(util.sprites.stage.var_GEAR, 2):
+                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 95) + 750)
+            if eq(util.sprites.stage.var_GEAR, 3):
+                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 58) + 750)
+            if eq(util.sprites.stage.var_GEAR, 4):
+                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 40.3) + 750)
+            if eq(util.sprites.stage.var_GEAR, 5):
+                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 32.6) + 750)
+            if eq(util.sprites.stage.var_GEAR, 6):
+                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 27.4) + 750)
+            if eq(util.sprites.stage.var_GEAR, 7):
+                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 24.2) + 750)
+            if eq(util.sprites.stage.var_GEAR, 8):
+                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 21.3) + 750)
+            if lt(util.sprites.stage.var_RPM, 750):
+                util.sprites.stage.var_RPM = 750
+            if gt(util.sprites.stage.var_RPM, 8000):
+                util.sprites.stage.var_RPM = 8000
+            if eq(util.sprites.stage.var_IsAccellerating, -1):
+                if gt(util.sprites.stage.var_RPM, 750):
+                    util.sprites.stage.var_RPM += -100
+            if lt(util.sprites.stage.var_speed, 0):
+                util.sprites.stage.var_speed = 0
+        eng.specific_rpm(util.sprites.stage.var_RPM)
+        emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * '+str(util.sprites.stage.var_RPM)+')</exec><writeln />'
+        if (util.sprites.stage.var_speed*7)*1.609344>255:
+            emulator.answer['SPEED'] = '<header>7E8</header><size>02</size><subd>41 0D</subd><eval>"%.2X" % 255</eval><space /><writeln />'
+        else:
+            emulator.answer['SPEED'] = '<header>7E8</header><size>02</size><subd>41 0D</subd><eval>"%.2X" % '+str(int(util.sprites.stage.var_speed*7*1.609344))+'</eval><space /><writeln />'
+        emulator.answer['THROTTLE_POS'] = '<exec>ECU_R_ADDR_E + " 04 41 11 %.2X" % int(255 * '+str(max(0, util.sprites.stage.var_IsAccellerating))+')</exec><writeln />'
+        data_dict['TimestampMS']=int((time.time()-start_time)*1000)
+        data_dict['CurrentEngineRpm']=util.sprites.stage.var_RPM
+        data_dict['Speed']=util.sprites.stage.var_speed*7/2.37
+        data_dict['Accel']=int(util.sprites.stage.var_gas*255)
+        data_dict['Brake']=int(util.sprites.stage.var_brake*255)
+        data_dict['Gear']=util.sprites.stage.var_GEAR-1
+        if address!='0.0.0.0':
+            try:
+                sock.sendto(encode_data(data_dict), (address, 9999))
+            except socket.error as e:
+                print(str(e))
+    @on_broadcast('tick')
+    async def broadcast_tick1(self, util):
+        pass
+
+    @on_broadcast('tick')
+    async def broadcast_tick2(self, util):
+        util.sprites.stage.var_KMH = ((util.sprites.stage.var_speed * 7) * 1.609)
+
+
+@sprite('GEARS')
+class SpriteGEARS(Target):
+    """Sprite GEARS"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        if parent is not None:
+            return
+
+        self._xpos = -184
+        self._ypos = -118.33953857421875
+        self._direction = 90
+        self.shown = True
+        self.pen = Pen(self)
+
+        self.costume = Costumes(
+           0, 100, "all around", [
+            {
+                'name': "not",
+                'path': "3fa9cbd3b3080ac10f1ef05646785001.png",
+                'center': (12, 17),
+                'scale': 2
+            },
+            {
+                'name': "not2",
+                'path': "25ad044f448f18c29ed3a7ae38bb21fe.png",
+                'center': (9, 17),
+                'scale': 2
+            },
+            {
+                'name': "not9",
+                'path': "a6b9b2c9512b847425c279f802294edd.png",
+                'center': (9, 17),
+                'scale': 2
+            },
+            {
+                'name': "not3",
+                'path': "7cd9c55717fb6bc46dbafc4fa6ae7562.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "not10",
+                'path': "123373605b45077085f2ad2ac99cda17.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "not4",
+                'path': "313317402e8f6abda4647f922d7d1eb1.png",
+                'center': (11, 17),
+                'scale': 2
+            },
+            {
+                'name': "not11",
+                'path': "d4cb7c82a1657dfe52ef1ed236b8c068.png",
+                'center': (11, 17),
+                'scale': 2
+            },
+            {
+                'name': "not5",
+                'path': "a5f9489ae7521258a9e3fc22c0826893.png",
+                'center': (11, 17),
+                'scale': 2
+            },
+            {
+                'name': "not12",
+                'path': "3cf56c611a98a3144bfa1004adb22196.png",
+                'center': (11, 17),
+                'scale': 2
+            },
+            {
+                'name': "not6",
+                'path': "d9ddda7ad10ed691c9d15bd8e89a8403.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "not13",
+                'path': "5cc57fffa70593313cc15cb980e093c8.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "not7",
+                'path': "c67427ad6ffb9e5838e7cb01e7c0a87b.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "not14",
+                'path': "b5c9e020be2af084c162fed78b9b21f4.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "not8",
+                'path': "25c1578cfe1944e149aeafc32151ee87.png",
+                'center': (11, 17),
+                'scale': 2
+            },
+            {
+                'name': "not15",
+                'path': "f4e2dde059f0f2fd0496994662190727.png",
+                'center': (11, 17),
+                'scale': 2
+            }
+        ])
+
+        self.sounds = Sounds(
+            100, [
+            {
+                'name': "pop",
+                'path': "83a9787d4cb6f3b7632b4ddfebf74367.wav"
+            }
+        ])
+
+
+
+
+
+        self.sprite.layer = 12
+
+    @on_green_flag
+    async def green_flag(self, util):
+        util.sprites.stage.var_RPM = 0
+        if eq(util.sprites.stage.var_IsAccellerating, 1):
+            util.sprites.stage.var_GEAR = 2
+        else:
+            util.sprites.stage.var_GEAR = 1
+        self.costume.switch("not")
+        util.sprites.stage.var_ON = 1
+        self.front_layer(util)
+        for _ in range(15):
+            util.sprites.stage.var_RPM += 50
+
+            await self.yield_()
+        util.sprites.stage.var_DMODE = 2
+        util.sprites.stage.var_Gearbox = 0
+
+    @on_green_flag
+    async def green_flag1(self, util):
+        util.sprites.stage.var_CHANGE = 0
+
+    @on_broadcast('gear_up')
+    async def broadcast_gear_up(self, util):
+        if lt(util.sprites.stage.var_GEAR, 8):
+            util.sprites.stage.var_GEAR += 1
+            util.sprites.stage.var_CHANGE = 1
+            if eq(util.sprites.stage.var_GEAR, 3):
+                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 58) + 750)):
+                    util.sprites.stage.var_RPM += -231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+            if eq(util.sprites.stage.var_GEAR, 4):
+                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 40.3) + 750)):
+                    util.sprites.stage.var_RPM += -231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+            if eq(util.sprites.stage.var_GEAR, 5):
+                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 32.6) + 750)):
+                    util.sprites.stage.var_RPM += -231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+            if eq(util.sprites.stage.var_GEAR, 6):
+                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 27.4) + 750)):
+                    util.sprites.stage.var_RPM += -231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+            if eq(util.sprites.stage.var_GEAR, 7):
+                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 24.2) + 750)):
+                    util.sprites.stage.var_RPM += -231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+            if eq(util.sprites.stage.var_GEAR, 8):
+                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 21.3) + 750)):
+                    util.sprites.stage.var_RPM += -231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+        util.sprites.stage.var_CHANGE = 0
+        await self.sleep(0.2)
+
+    @on_broadcast('gear_down')
+    async def broadcast_gear_down(self, util):
+        if gt(util.sprites.stage.var_GEAR, 1):
+            util.sprites.stage.var_GEAR += -1
+            util.sprites.stage.var_CHANGE = 2
+            if eq(util.sprites.stage.var_GEAR, 7):
+                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 21.3) + 750)):
+                    util.sprites.stage.var_RPM += 231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+            if eq(util.sprites.stage.var_GEAR, 6):
+                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 27.4) + 750)):
+                    util.sprites.stage.var_RPM += 231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+            if eq(util.sprites.stage.var_GEAR, 5):
+                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 32.6) + 750)):
+                    util.sprites.stage.var_RPM += 231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+            if eq(util.sprites.stage.var_GEAR, 4):
+                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 40.3) + 750)):
+                    util.sprites.stage.var_RPM += 231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+            if eq(util.sprites.stage.var_GEAR, 3):
+                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 58) + 750)):
+                    util.sprites.stage.var_RPM += 231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+            if eq(util.sprites.stage.var_GEAR, 2):
+                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 95) + 750)):
+                    util.sprites.stage.var_RPM += 231
+
+                    await self.yield_()
+                util.sprites.stage.var_CHANGE = 0
+            if eq(util.sprites.stage.var_GEAR, 1):
+                util.sprites.stage.var_CHANGE = 0
+        util.sprites.stage.var_CHANGE = 0
+        await self.sleep(0.2)
+
+    @on_broadcast('tick')
+    async def broadcast_tick(self, util):
+        if eq(util.sprites.stage.var_GEAR, 1):
+            self.costume.switch("not")
+        else:
+            if gt(util.sprites.stage.var_RPM, 7000):
+                self.costume.switch((((util.sprites.stage.var_GEAR - 1) * 2) + 1))
+            else:
+                self.costume.switch(((util.sprites.stage.var_GEAR - 1) * 2))
+
+    @on_broadcast('crash')
+    async def broadcast_crash(self, util):
+        self.costume.switch("not")
+
+
 @sprite('TransmissionSettings')
 class SpriteTransmissionSettings(Target):
     """Sprite TransmissionSettings"""
@@ -1283,218 +2315,100 @@ class SpriteTransmissionSettings(Target):
 
     @on_broadcast('tick')
     async def broadcast_tick(self, util):
-        if gt(util.sprites.stage.var_RPM, 3800):
-            if ((not gt(util.sprites.stage.var_IsAccellerating, 0) and lt(util.sprites.stage.var_RPM, 4000)) and gt(util.sprites.stage.var_GEAR, 1)):
-                util.send_broadcast("GEAR_DOWN")
-        if ((not gt(util.sprites.stage.var_IsAccellerating, 0) and lt(util.sprites.stage.var_RPM, 1200)) and gt(util.sprites.stage.var_GEAR, 1)):
+        if (not gt(util.sprites.stage.var_IsAccellerating, 0) or (gt(util.sprites.stage.var_GEAR, 3) and eq(util.sprites.stage.var_touchinggrass, 1))) and ((((util.sprites.stage.var_RPM>3800 and util.sprites.stage.var_RPM<4000) or util.sprites.stage.var_RPM<=1200) and util.sprites.stage.var_GEAR>2) or util.sprites.stage.var_speed==0 and util.sprites.stage.var_GEAR>1):
             util.send_broadcast("GEAR_DOWN")
-        if ((gt(util.sprites.stage.var_IsAccellerating, 0) and (gt(util.sprites.stage.var_RPM, (6700 * util.sprites.stage.var_IsAccellerating)) or gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_MaxRpm + 200) * util.sprites.stage.var_IsAccellerating)))) and lt(util.sprites.stage.var_GEAR, 8)):
+        if (((gt(util.sprites.stage.var_IsAccellerating, 0) and (lt(util.sprites.stage.var_GEAR, 3) or not eq(util.sprites.stage.var_touchinggrass, 1))) and (gt(util.sprites.stage.var_RPM, max(1500, 7200 * util.sprites.stage.var_IsAccellerating)) or gt(util.sprites.stage.var_RPM, (util.sprites.stage.var_MaxRpm + 200)))) and lt(util.sprites.stage.var_GEAR, 8)):
             util.send_broadcast("GEAR_UP")
         if (gt(util.sprites.stage.var_IsAccellerating, 0) and eq(util.sprites.stage.var_GEAR, 1)):
             util.send_broadcast("GEAR_UP")
-
-
-@sprite('ENG-RPM')
-class SpriteENGRPM(Target):
-    """Sprite ENG-RPM"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if parent is not None:
-            return
-
-        self._xpos = -53
-        self._ypos = -36
-        self._direction = 90
-        self.shown = True
-        self.pen = Pen(self)
-
-        self.costume = Costumes(
-           0, 100, "all around", [
-            {
-                'name': "costume1",
-                'path': "d36f6603ec293d2c2198d3ea05109fe0.png",
-                'center': (0, 0),
-                'scale': 2
-            }
-        ])
-
-        self.sounds = Sounds(
-            10, [
-
-        ])
-
-
-
-
-
-        self.sprite.layer = 6
-
-    @on_green_flag
-    async def green_flag(self, util):
-        util.sprites.stage.var_GEAR = 1
-        util.sprites.stage.var_MaxRpm = 7500
-        while True:
-            if eq(util.sprites.stage.var_GEAR, 1):
-                if (eq(util.sprites.stage.var_IsAccellerating, 1) and lt(util.sprites.stage.var_RPM, (util.sprites.stage.var_MaxRpm * util.sprites.stage.var_IsAccellerating))):
-                    util.sprites.stage.var_RPM += (416 * util.sprites.stage.var_IsAccellerating)
-                else:
-                    if gt(util.sprites.stage.var_RPM, 750):
-                        util.sprites.stage.var_RPM += -97
-            if eq(util.sprites.stage.var_GEAR, 2):
-                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 95) + 750)
-            if eq(util.sprites.stage.var_GEAR, 3):
-                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 58) + 750)
-            if eq(util.sprites.stage.var_GEAR, 4):
-                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 40.3) + 750)
-            if eq(util.sprites.stage.var_GEAR, 5):
-                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 32.6) + 750)
-            if eq(util.sprites.stage.var_GEAR, 6):
-                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 27.4) + 750)
-            if eq(util.sprites.stage.var_GEAR, 7):
-                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 24.2) + 750)
-            if eq(util.sprites.stage.var_GEAR, 8):
-                util.sprites.stage.var_RPM = ((util.sprites.stage.var_KMH * 21.3) + 750)
-            emulator.answer['RPM'] = '<exec>ECU_R_ADDR_E + " 04 41 0C %.4X" % int(4 * '+str(util.sprites.stage.var_RPM)+')</exec><writeln />'
-            emulator.answer['SPEED'] = '<exec>ECU_R_ADDR_E + " 04 41 0D %.4X" % int('+str(util.sprites.stage.var_MPH*1.609344)+')</exec><writeln />'
-            await self.yield_()
-
-    @on_green_flag
-    async def green_flag1(self, util):
-        while True:
-            if lt(util.sprites.stage.var_RPM, 750):
-                util.sprites.stage.var_RPM = 750
-            if gt(util.sprites.stage.var_RPM, 8000):
-                util.sprites.stage.var_RPM = 8000
-            if lt(util.sprites.stage.var_IsAccellerating, 0):
-                if gt(util.sprites.stage.var_RPM, 750):
-                    util.sprites.stage.var_RPM += (100 * util.sprites.stage.var_IsAccellerating)
-            if lt(util.sprites.stage.var_speed, 0):
-                util.sprites.stage.var_speed = 0
-
-            await self.yield_()
-
-    @on_broadcast('crash')
-    async def broadcast_crash(self, util):
-        self.stop_other()
-        util.sprites.stage.var_RPM = 0
-
-    @on_broadcast('tick')
-    async def broadcast_tick(self, util):
-        util.sprites.stage.var_KMH = ((util.sprites.stage.var_speed * 7) * 1.609)
-
-
-@sprite('GEARS')
-class SpriteGEARS(Target):
-    """Sprite GEARS"""
+        if util.sprites.stage.var_IsAccellerating==1.0 and util.sprites.stage.var_CHANGE==0:
+            if util.sprites.stage.var_GEAR==3 and util.sprites.stage.var_MPH<35:
+                util.send_broadcast("GEAR_DOWN")
+            if util.sprites.stage.var_GEAR==4 and util.sprites.stage.var_MPH<60:
+                util.send_broadcast("GEAR_DOWN")
+            if util.sprites.stage.var_GEAR==5 and util.sprites.stage.var_MPH<80:
+                util.send_broadcast("GEAR_DOWN")
+            if util.sprites.stage.var_GEAR==6 and util.sprites.stage.var_MPH<90:
+                util.send_broadcast("GEAR_DOWN")
+            if util.sprites.stage.var_GEAR==7 and util.sprites.stage.var_MPH<100:
+                util.send_broadcast("GEAR_DOWN")
+            if util.sprites.stage.var_GEAR==8 and util.sprites.stage.var_MPH<110:
+                util.send_broadcast("GEAR_DOWN")
+@sprite('Sprite10')
+class Sprite10(Target):
+    """Sprite Sprite10"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         if parent is not None:
             return
 
-        self._xpos = -184
-        self._ypos = -118.33953857421875
+        self._xpos = -154
+        self._ypos = -155
         self._direction = 90
         self.shown = True
         self.pen = Pen(self)
 
         self.costume = Costumes(
-           0, 100, "all around", [
+           0, 200, "all around", [
             {
-                'name': "not",
-                'path': "3fa9cbd3b3080ac10f1ef05646785001.png",
-                'center': (12, 17),
+                'name': "0",
+                'path': "f9854afa09d45e858b6f9e323d4f0f29.png",
+                'center': (10, 17),
                 'scale': 2
             },
             {
-                'name': "not2",
-                'path': "25ad044f448f18c29ed3a7ae38bb21fe.png",
+                'name': "1",
+                'path': "83b6f9a76caec90f9cb6c5d7734426f9.png",
                 'center': (9, 17),
                 'scale': 2
             },
             {
-                'name': "not3",
-                'path': "7cd9c55717fb6bc46dbafc4fa6ae7562.png",
+                'name': "2",
+                'path': "a64d08001f030e313006b4e2973d3e25.png",
                 'center': (10, 17),
                 'scale': 2
             },
             {
-                'name': "not4",
-                'path': "313317402e8f6abda4647f922d7d1eb1.png",
+                'name': "3",
+                'path': "60a10eeb56f58ae4aeccc5e938035249.png",
                 'center': (11, 17),
                 'scale': 2
             },
             {
-                'name': "not5",
-                'path': "a5f9489ae7521258a9e3fc22c0826893.png",
+                'name': "4",
+                'path': "877a3eb86a40af9008b1aeaf5574584d.png",
                 'center': (11, 17),
                 'scale': 2
             },
             {
-                'name': "not6",
-                'path': "d9ddda7ad10ed691c9d15bd8e89a8403.png",
+                'name': "5",
+                'path': "e1ce823a83a07cbd7a72c0646ebde93f.png",
                 'center': (10, 17),
                 'scale': 2
             },
             {
-                'name': "not7",
-                'path': "c67427ad6ffb9e5838e7cb01e7c0a87b.png",
+                'name': "6",
+                'path': "03ed54027d91b1ebfdc1ae0408517898.png",
                 'center': (10, 17),
                 'scale': 2
             },
             {
-                'name': "not8",
-                'path': "25c1578cfe1944e149aeafc32151ee87.png",
+                'name': "7",
+                'path': "0ec224d1425f5e64dce0c8ed53c585ed.png",
                 'center': (11, 17),
                 'scale': 2
             },
             {
-                'name': "not16",
-                'path': "f1bce17f3abc785880b6d301ac40d55c.png",
-                'center': (12, 17),
-                'scale': 2
-            },
-            {
-                'name': "not9",
-                'path': "a6b9b2c9512b847425c279f802294edd.png",
-                'center': (9, 17),
-                'scale': 2
-            },
-            {
-                'name': "not10",
-                'path': "123373605b45077085f2ad2ac99cda17.png",
+                'name': "8",
+                'path': "ce8d9543febed1cc758322e0acecc098.png",
                 'center': (10, 17),
                 'scale': 2
             },
             {
-                'name': "not11",
-                'path': "d4cb7c82a1657dfe52ef1ed236b8c068.png",
-                'center': (11, 17),
-                'scale': 2
-            },
-            {
-                'name': "not12",
-                'path': "3cf56c611a98a3144bfa1004adb22196.png",
-                'center': (11, 17),
-                'scale': 2
-            },
-            {
-                'name': "not13",
-                'path': "5cc57fffa70593313cc15cb980e093c8.png",
+                'name': "9",
+                'path': "89c00e1df8dd7d9202cb7524576b5e86.png",
                 'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "not14",
-                'path': "b5c9e020be2af084c162fed78b9b21f4.png",
-                'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "not15",
-                'path': "f4e2dde059f0f2fd0496994662190727.png",
-                'center': (11, 17),
                 'scale': 2
             }
         ])
@@ -1511,126 +2425,18 @@ class SpriteGEARS(Target):
 
 
 
-        self.sprite.layer = 10
-
-    @on_green_flag
-    async def green_flag(self, util):
-        util.sprites.stage.var_RPM = 0
-        if eq(util.sprites.stage.var_IsAccellerating, 1):
-            util.sprites.stage.var_GEAR = 2
-        else:
-            util.sprites.stage.var_GEAR = 1
-        self.costume.switch("not")
-        util.sprites.stage.var_ON = 1
-        self.front_layer(util)
-        for _ in range(15):
-            util.sprites.stage.var_RPM += 50
-
-            await self.yield_()
-        util.sprites.stage.var_DMODE = 2
-        util.sprites.stage.var_Gearbox = 0
-        util.sprites.stage.var_CHANGE = 0
-
-    @on_green_flag
-    async def green_flag1(self, util):
-        pass
-
-    @on_broadcast('gear_up')
-    async def broadcast_gear_up(self, util):
-        if lt(util.sprites.stage.var_GEAR, 8):
-            util.sprites.stage.var_GEAR += 1
-            util.sprites.stage.var_CHANGE = 1
-            self.costume.switch(util.sprites.stage.var_GEAR)
-            if eq(util.sprites.stage.var_GEAR, 3):
-                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 58) + 750)):
-                    util.sprites.stage.var_RPM += -231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-            if eq(util.sprites.stage.var_GEAR, 4):
-                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 40.3) + 750)):
-                    util.sprites.stage.var_RPM += -231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-            if eq(util.sprites.stage.var_GEAR, 5):
-                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 32.6) + 750)):
-                    util.sprites.stage.var_RPM += -231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-            if eq(util.sprites.stage.var_GEAR, 6):
-                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 27.4) + 750)):
-                    util.sprites.stage.var_RPM += -231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-            if eq(util.sprites.stage.var_GEAR, 7):
-                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 24.2) + 750)):
-                    util.sprites.stage.var_RPM += -231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-            if eq(util.sprites.stage.var_GEAR, 8):
-                while not lt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 21.3) + 750)):
-                    util.sprites.stage.var_RPM += -231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-        await self.sleep(0.2)
-
-    @on_broadcast('gear_down')
-    async def broadcast_gear_down(self, util):
-        if gt(util.sprites.stage.var_GEAR, 1):
-            util.sprites.stage.var_GEAR += -1
-            util.sprites.stage.var_CHANGE = 2
-            self.costume.switch(util.sprites.stage.var_GEAR)
-            if eq(util.sprites.stage.var_GEAR, 7):
-                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 21.3) + 750)):
-                    util.sprites.stage.var_RPM += 231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-            if eq(util.sprites.stage.var_GEAR, 6):
-                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 27.4) + 750)):
-                    util.sprites.stage.var_RPM += 231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-            if eq(util.sprites.stage.var_GEAR, 5):
-                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 32.6) + 750)):
-                    util.sprites.stage.var_RPM += 231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-            if eq(util.sprites.stage.var_GEAR, 4):
-                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 40.3) + 750)):
-                    util.sprites.stage.var_RPM += 231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-            if eq(util.sprites.stage.var_GEAR, 3):
-                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 58) + 750)):
-                    util.sprites.stage.var_RPM += 231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-            if eq(util.sprites.stage.var_GEAR, 2):
-                while not gt(util.sprites.stage.var_RPM, ((util.sprites.stage.var_KMH * 151) + 750)):
-                    util.sprites.stage.var_RPM += 231
-
-                    await self.yield_()
-                util.sprites.stage.var_CHANGE = 0
-            if eq(util.sprites.stage.var_GEAR, 1):
-                util.sprites.stage.var_CHANGE = 0
-        await self.sleep(0.2)
+        self.sprite.layer = 17
 
     @on_broadcast('tick')
     async def broadcast_tick(self, util):
-        if gt(util.sprites.stage.var_RPM, 6300):
-            self.costume.switch((util.sprites.stage.var_GEAR + 8))
-        else:
-            self.costume.switch(util.sprites.stage.var_GEAR)
+        self.front_layer(util)
+        self.costume.switch(letter_of(str((math.floor(util.sprites.stage.var_MPH) % 10)), 1))
+        self.costume.set_effect('color', (-115 * div(util.sprites.stage.var_MPH, 197)))
+
+    @on_broadcast('crash')
+    async def broadcast_crash(self, util):
+        self.costume.switch(0)
+        self.costume.clear_effects()
 
 
 @sprite('Rev2')
@@ -1681,6 +2487,7 @@ class SpriteRev2(Target):
     async def green_flag(self, util):
         self.front_layer(util)
         self.direction = -101
+        util.sprites.stage.var_EngineOnOff = 1
 
     @on_broadcast('tick')
     async def broadcast_tick(self, util):
@@ -1691,257 +2498,7 @@ class SpriteRev2(Target):
                 self.direction += div((div(util.sprites.stage.var_RPM, 31.5) - (((305 + self.direction) % 720) - 180)), 5)
         else:
             self.direction = 120
-
-
-@sprite('Sprite10')
-class Sprite10(Target):
-    """Sprite Sprite10"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if parent is not None:
-            return
-
-        self._xpos = -154
-        self._ypos = -155
-        self._direction = 90
-        self.shown = True
-        self.pen = Pen(self)
-
-        self.costume = Costumes(
-           0, 200, "all around", [
-            {
-                'name': "0",
-                'path': "b2c88513024d459b754e77d83f61c85e.png",
-                'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "1",
-                'path': "25ad044f448f18c29ed3a7ae38bb21fe.png",
-                'center': (9, 17),
-                'scale': 2
-            },
-            {
-                'name': "2",
-                'path': "7cd9c55717fb6bc46dbafc4fa6ae7562.png",
-                'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "3",
-                'path': "313317402e8f6abda4647f922d7d1eb1.png",
-                'center': (11, 17),
-                'scale': 2
-            },
-            {
-                'name': "4",
-                'path': "a5f9489ae7521258a9e3fc22c0826893.png",
-                'center': (11, 17),
-                'scale': 2
-            },
-            {
-                'name': "5",
-                'path': "d9ddda7ad10ed691c9d15bd8e89a8403.png",
-                'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "6",
-                'path': "c67427ad6ffb9e5838e7cb01e7c0a87b.png",
-                'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "7",
-                'path': "25c1578cfe1944e149aeafc32151ee87.png",
-                'center': (11, 17),
-                'scale': 2
-            },
-            {
-                'name': "8",
-                'path': "a5ff3b021382f90770d138e9c1b29fc4.png",
-                'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "9",
-                'path': "e0e917a56ad09fde0ff1358972e47cce.png",
-                'center': (10, 17),
-                'scale': 2
-            }
-        ])
-
-        self.sounds = Sounds(
-            100, [
-            {
-                'name': "pop",
-                'path': "83a9787d4cb6f3b7632b4ddfebf74367.wav"
-            }
-        ])
-
-
-
-
-
-        self.sprite.layer = 17
-
-    @on_broadcast('tick')
-    async def broadcast_tick(self, util):
-        self.front_layer(util)
-        self.costume.switch(letter_of(str((math.floor(abs(util.sprites.stage.var_MPH)) % 10)), 1))
-
-
-@sprite('Sprite12')
-class Sprite12(Target):
-    """Sprite Sprite12"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if parent is not None:
-            return
-
-        self._xpos = -196
-        self._ypos = -155
-        self._direction = 90
-        self.shown = False
-        self.pen = Pen(self)
-
-        self.costume = Costumes(
-           0, 200, "all around", [
-            {
-                'name': "1",
-                'path': "25ad044f448f18c29ed3a7ae38bb21fe.png",
-                'center': (9, 17),
-                'scale': 2
-            }
-        ])
-
-        self.sounds = Sounds(
-            100, [
-            {
-                'name': "pop",
-                'path': "83a9787d4cb6f3b7632b4ddfebf74367.wav"
-            }
-        ])
-
-
-
-
-
-        self.sprite.layer = 16
-
-    @on_broadcast('tick')
-    async def broadcast_tick(self, util):
-        self.front_layer(util)
-        if gt(math.floor(div(util.sprites.stage.var_MPH, 100)), 0):
-            self.shown = True
-            self.costume.switch(math.floor(div(util.sprites.stage.var_MPH, 100)))
-        else:
-            self.shown = False
-
-
-@sprite('Sprite11')
-class Sprite11(Target):
-    """Sprite Sprite11"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        if parent is not None:
-            return
-
-        self._xpos = -177
-        self._ypos = -155
-        self._direction = 90
-        self.shown = False
-        self.pen = Pen(self)
-
-        self.costume = Costumes(
-           6, 200, "all around", [
-            {
-                'name': "0",
-                'path': "b2c88513024d459b754e77d83f61c85e.png",
-                'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "1",
-                'path': "25ad044f448f18c29ed3a7ae38bb21fe.png",
-                'center': (9, 17),
-                'scale': 2
-            },
-            {
-                'name': "2",
-                'path': "7cd9c55717fb6bc46dbafc4fa6ae7562.png",
-                'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "3",
-                'path': "313317402e8f6abda4647f922d7d1eb1.png",
-                'center': (11, 17),
-                'scale': 2
-            },
-            {
-                'name': "4",
-                'path': "a5f9489ae7521258a9e3fc22c0826893.png",
-                'center': (11, 17),
-                'scale': 2
-            },
-            {
-                'name': "5",
-                'path': "d9ddda7ad10ed691c9d15bd8e89a8403.png",
-                'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "6",
-                'path': "f0fcf92a5f2b72faa5f7d3c873fdd2d2.png",
-                'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "7",
-                'path': "25c1578cfe1944e149aeafc32151ee87.png",
-                'center': (11, 17),
-                'scale': 2
-            },
-            {
-                'name': "8",
-                'path': "a5ff3b021382f90770d138e9c1b29fc4.png",
-                'center': (10, 17),
-                'scale': 2
-            },
-            {
-                'name': "9",
-                'path': "e0e917a56ad09fde0ff1358972e47cce.png",
-                'center': (10, 17),
-                'scale': 2
-            }
-        ])
-
-        self.sounds = Sounds(
-            100, [
-            {
-                'name': "pop",
-                'path': "83a9787d4cb6f3b7632b4ddfebf74367.wav"
-            }
-        ])
-
-
-
-
-
-        self.sprite.layer = 15
-
-    @on_broadcast('tick')
-    async def broadcast_tick(self, util):
-        self.front_layer(util)
-        if gt(math.floor(div(util.sprites.stage.var_MPH, 10)), 0):
-            self.shown = True
-            self.costume.switch(letter_of(str((math.floor(div(util.sprites.stage.var_MPH, 10)) % 10)), 1))
-        else:
-            self.shown = False
+        util.sprites.stage.var_RPMangle = (self.direction + 176)
 
 
 @sprite('T1-b')
@@ -1981,12 +2538,269 @@ class SpriteT1b(Target):
 
 
 
+        self.sprite.layer = 6
+
+
+
+
+@sprite('Rev3')
+class SpriteRev3(Target):
+    """Sprite Rev3"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        if parent is not None:
+            return
+
+        self._xpos = -182
+        self._ypos = -80
+        self._direction = -101.19047619047618
+        self.shown = False
+        self.pen = Pen(self)
+
+        self.costume = Costumes(
+           0, 50, "all around", [
+            {
+                'name': "costume1",
+                'path': "d00e52a0b879f76591518f1b6095262a-fallback.png",
+                'center': (20, 14),
+                'scale': 1
+            }
+        ])
+
+        self.sounds = Sounds(
+            100, [
+            {
+                'name': "pop",
+                'path': "83a9787d4cb6f3b7632b4ddfebf74367.wav"
+            }
+        ])
+
+
+
+
+
         self.sprite.layer = 7
 
+    @on_broadcast('crash')
+    async def broadcast_crash(self, util):
+        self.stop_other()
+        self.direction = -126
+
+    @on_green_flag
+    async def green_flag(self, util):
+        self.direction = -101
+        util.sprites.stage.var_EngineOnOff = 1
+
+    @on_broadcast('tick')
+    async def broadcast_tick(self, util):
+        self.costume.set_effect('ghost', 50)
+        if gt(util.sprites["Rev2"].direction, self.direction):
+            self.direction = util.sprites["Rev2"].direction
+            util.sprites.stage.var_time_hold = util.timer()
+        else:
+            if gt((util.timer() - util.sprites.stage.var_time_hold), 3):
+                self.direction = util.sprites["Rev2"].direction
+
+
+@sprite('Sprite3')
+class Sprite3(Target):
+    """Sprite Sprite3"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        if parent is not None:
+            return
+
+        self._xpos = -177
+        self._ypos = -155
+        self._direction = 90
+        self.shown = False
+        self.pen = Pen(self)
+
+        self.costume = Costumes(
+           9, 200, "all around", [
+            {
+                'name': "0",
+                'path': "f9854afa09d45e858b6f9e323d4f0f29.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "1",
+                'path': "83b6f9a76caec90f9cb6c5d7734426f9.png",
+                'center': (9, 17),
+                'scale': 2
+            },
+            {
+                'name': "2",
+                'path': "a64d08001f030e313006b4e2973d3e25.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "3",
+                'path': "60a10eeb56f58ae4aeccc5e938035249.png",
+                'center': (11, 17),
+                'scale': 2
+            },
+            {
+                'name': "4",
+                'path': "877a3eb86a40af9008b1aeaf5574584d.png",
+                'center': (11, 17),
+                'scale': 2
+            },
+            {
+                'name': "5",
+                'path': "e1ce823a83a07cbd7a72c0646ebde93f.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "6",
+                'path': "03ed54027d91b1ebfdc1ae0408517898.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "7",
+                'path': "0ec224d1425f5e64dce0c8ed53c585ed.png",
+                'center': (11, 17),
+                'scale': 2
+            },
+            {
+                'name': "8",
+                'path': "ce8d9543febed1cc758322e0acecc098.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "9",
+                'path': "89c00e1df8dd7d9202cb7524576b5e86.png",
+                'center': (10, 17),
+                'scale': 2
+            }
+        ])
+
+        self.sounds = Sounds(
+            100, [
+            {
+                'name': "pop",
+                'path': "83a9787d4cb6f3b7632b4ddfebf74367.wav"
+            }
+        ])
 
 
 
 
 
+        self.sprite.layer = 15
+
+    @on_broadcast('tick')
+    async def broadcast_tick(self, util):
+        self.front_layer(util)
+        if gt(util.sprites.stage.var_MPH, 9):
+            self.shown = True
+            self.costume.switch(letter_of(str((math.floor(div(util.sprites.stage.var_MPH, 10)) % 10)), 1))
+        else:
+            self.shown = False
+        self.costume.set_effect('color', (-115 * div(util.sprites.stage.var_MPH, 197)))
+
+    @on_broadcast('crash')
+    async def broadcast_crash(self, util):
+        self.shown = False
+
+
+@sprite('Sprite4')
+class Sprite4(Target):
+    """Sprite Sprite4"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        if parent is not None:
+            return
+
+        self._xpos = -196
+        self._ypos = -155
+        self._direction = 90
+        self.shown = False
+        self.pen = Pen(self)
+
+        self.costume = Costumes(
+           0, 200, "all around", [
+            {
+                'name': "0",
+                'path': "f9854afa09d45e858b6f9e323d4f0f29.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "1",
+                'path': "83b6f9a76caec90f9cb6c5d7734426f9.png",
+                'center': (9, 17),
+                'scale': 2
+            },
+            {
+                'name': "2",
+                'path': "a64d08001f030e313006b4e2973d3e25.png",
+                'center': (10, 17),
+                'scale': 2
+            },
+            {
+                'name': "3",
+                'path': "60a10eeb56f58ae4aeccc5e938035249.png",
+                'center': (11, 17),
+                'scale': 2
+            }
+        ])
+
+        self.sounds = Sounds(
+            100, [
+            {
+                'name': "pop",
+                'path': "83a9787d4cb6f3b7632b4ddfebf74367.wav"
+            }
+        ])
+
+
+
+
+
+        self.sprite.layer = 16
+
+    @on_broadcast('tick')
+    async def broadcast_tick(self, util):
+        self.front_layer(util)
+        if gt((math.floor(div(util.sprites.stage.var_MPH, 100)) % 10), 0):
+            self.shown = True
+            self.costume.switch(letter_of(str((math.floor(div(util.sprites.stage.var_MPH, 100)) % 10)), 1))
+        else:
+            self.shown = False
+        self.costume.set_effect('color', (-115 * div(util.sprites.stage.var_MPH, 197)))
+
+    @on_broadcast('crash')
+    async def broadcast_crash(self, util):
+        self.shown = False
+data_dict['IsRaceOn']=1
+data_dict['EngineMaxRpm']=8000
+data_dict['EngineIdleRpm']=750
+start_time=time.time()
+set_deadzone(DEADZONE_TRIGGER, 0)
+CreateKeyEx(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver\Car Racing 3D', reserved=0)
+try:
+    address=QueryValueEx(OpenKey(OpenKey(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver', reserved=0, access=KEY_ALL_ACCESS), 'Car Racing 3D', reserved=0, access=KEY_ALL_ACCESS), 'UDPAddr')[0]
+except:
+    address='0.0.0.0'
+    SetValueEx(OpenKey(OpenKey(OpenKey(HKEY_CURRENT_USER, 'Software', reserved=0, access=KEY_ALL_ACCESS), 'sserver', reserved=0, access=KEY_ALL_ACCESS), 'Car Racing 3D', reserved=0, access=KEY_ALL_ACCESS), 'UDPAddr', 0, REG_SZ, '0.0.0.0')
+if address!='0.0.0.0':
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setblocking(False)
 if __name__ == '__main__':
+    if not get_connected()[0]:
+        if not messagebox.askokcancel('Experience may be Diminished', 'No controller is detected. This means that inputs have no granularity. You can connect a controller at any time during the game to mitigate this. Press OK to launch the game without granular input, or Cancel to quit.', icon='warning'):
+            sys.exit()
+    emulator=elm.Elm()
+    emulator.net_port=35000
+    emulator.scenario='car'
+    Thread(target=emulator.run, daemon=True).start()
     engine.start_program()
